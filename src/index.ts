@@ -236,6 +236,10 @@ async function getPatients() {
         patient[docType] = [pathname];
       }
     }
+    if (!patient[1]?.length || !patient[2]?.length) {
+      console.log(`${patientFolder} does not have required parts 1 and 2`);
+      continue;
+    }
     patients.push(patient);
   }
 
