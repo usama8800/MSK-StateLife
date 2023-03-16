@@ -67,6 +67,7 @@ const docTypesMap = {
   11: '16',
 };
 
+let patientsPath = 'patients';
 let freshDischarges: Discharge[] = [];
 let cookies: any = {};
 
@@ -201,7 +202,7 @@ async function doPatient(patient: Patient) {
 
 async function getPatients() {
   const patients: Patient[] = [];
-  const patientFolders = await fs.readdir('patients');
+  const patientFolders = await fs.readdir(patientsPath);
 
   patientLoop: for (const patientFolder of patientFolders) {
     const visitNoMatch = patientFolder.match(/.+?(\d+)/);
@@ -212,9 +213,9 @@ async function getPatients() {
     const visitNo = visitNoMatch[1];
     const patient: Patient = { visitNo, name: patientFolder };
 
-    const names = await fs.readdir(resolve('patients', patientFolder));
+    const names = await fs.readdir(resolve(patientsPath, patientFolder));
     for (const name of names) {
-      const pathname = resolve('patients', patientFolder, name);
+      const pathname = resolve(patientsPath, patientFolder, name);
       const nameMatch = name.match(/^(\d+)/);
       const stat = await fs.stat(pathname);
 
@@ -241,4 +242,11 @@ async function getPatients() {
   return patients;
 }
 
-main();
+if (require.main === module) {
+  if (process.argv.length === 3) {
+    patientsPath = process.argv[2];
+  } else {
+    console.log('Folder not given. Using ./patients');
+  }
+  main();
+}
