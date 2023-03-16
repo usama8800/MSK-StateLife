@@ -1,0 +1,71 @@
+{
+    "root": true,
+    "env": {
+        "node": true,
+        "browser": true
+    },
+    "parser": "@typescript-eslint/parser",
+    "plugins": [
+        "@typescript-eslint"
+    ],
+    "extends": [
+        "eslint:recommended",
+        "plugin:@typescript-eslint/recommended"
+    ],
+    "rules": {
+        "@typescript-eslint/explicit-module-boundary-types": "off",
+        "@typescript-eslint/no-explicit-any": "off",
+        "no-empty": "warn",
+        "no-debugger": "off",
+        "object-shorthand": [
+            "warn",
+            "always"
+        ],
+        "semi": [
+            "warn",
+            "always"
+        ],
+        "semi-style": [
+            "warn",
+            "last"
+        ],
+        "semi-spacing": [
+            "warn",
+            {
+                "before": false,
+                "after": true
+            }
+        ],
+        "no-useless-catch": [
+            "warn"
+        ],
+        "quotes": [
+            "warn",
+            "single"
+        ],
+        "quote-props": [
+            2,
+            "as-needed"
+        ],
+        "no-shadow": "off",
+        "@typescript-eslint/no-shadow": "warn",
+        "@typescript-eslint/no-empty-function": "off",
+        "no-constant-condition": "off",
+        "@typescript-eslint/no-unused-vars": [
+            "warn",
+            {
+                "argsIgnorePattern": "^_",
+                "varsIgnorePattern": "^_"
+            }
+        ],
+        "max-len": [
+            "warn",
+            {
+                "code": 140,
+                "ignoreTemplateLiterals": true,
+                "ignoreStrings": true
+            }
+        ],
+        "@typescript-eslint/no-non-null-assertion": "off"
+    }
+}
