@@ -218,21 +218,20 @@ async function getPatients() {
       const pathname = resolve(patientsPath, patientFolder, name);
       const nameMatch = name.match(/^(\d+)/);
       const stat = await fs.stat(pathname);
+      if (!nameMatch) {
+        console.log(`${patientFolder} has bad folder or file name '${name}'`);
+        continue patientLoop;
+      }
+      const docType = docTypesMap[nameMatch[1]];
+      if (!docType) {
+        console.log(`${patientFolder} has bad folder or file name '${name}'`);
+        continue patientLoop;
+      }
 
       if (stat.isDirectory()) {
-        if (!nameMatch) {
-          console.log(`${patientFolder} has bad directory name '${name}'`);
-          continue patientLoop;
-        }
-        const docType = docTypesMap[nameMatch[1]];
         const filenames = await fs.readdir(pathname);
         patient[docType] = filenames.map(f => resolve(pathname, f));
       } else {
-        if (!nameMatch) {
-          console.log(`${patientFolder} has bad filename name '${name}'`);
-          continue patientLoop;
-        }
-        const docType = docTypesMap[nameMatch[1]];
         patient[docType] = [pathname];
       }
     }
