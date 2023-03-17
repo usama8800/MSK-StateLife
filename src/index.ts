@@ -91,6 +91,8 @@ async function main() {
   });
   if (!res.data.success) {
     console.log('Login failed');
+    console.log('username', process.env.username);
+    console.log('password', process.env.password);
     exit(1);
   }
   setCookies(res.headers);
