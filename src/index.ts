@@ -93,6 +93,7 @@ async function main() {
     console.log('Login failed');
     console.log('username', process.env.username);
     console.log('password', process.env.password);
+    console.log(res.data);
     exit(1);
   }
   setCookies(res.headers);
@@ -107,6 +108,7 @@ async function main() {
   });
   if (!res.data.success) {
     console.log('Getting fresh discharges failed');
+    console.log(res.data);
     exit(1);
   }
   setCookies(res.headers);
