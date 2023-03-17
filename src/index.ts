@@ -110,7 +110,7 @@ async function main() {
 }
 
 async function doPatient(patient: Patient) {
-  console.log(patient.visitNo: patient.name);
+  console.log(patient.visitNo, patient.name);
   const discharge = freshDischarges.find(d => d.visitNo === patient.visitNo);
   if (!discharge) {
     console.log(patient.name, 'not in fresh discharge');
