@@ -120,7 +120,6 @@ async function main() {
 }
 
 async function doPatient(patient: Patient) {
-  console.log(patient.visitNo, patient.name);
   const discharge = freshDischarges.find(d => d.visitNo === patient.visitNo);
   if (!discharge) {
     console.log(patient.name, 'not in fresh discharge');
@@ -216,7 +215,7 @@ async function getPatients() {
   const patientFolders = await fs.readdir(patientsPath);
 
   patientLoop: for (const patientFolder of patientFolders) {
-    const visitNoMatch = patientFolder.match(/.+?(\d+)/);
+    const visitNoMatch = patientFolder.match(/(\d+)$/);
     if (!visitNoMatch) {
       console.log(patientFolder, 'visit number not found at end');
       continue;
