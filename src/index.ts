@@ -89,7 +89,10 @@ async function main() {
       cookie: getCookieValue(Object.keys(cookies).find(x => x.includes('Antiforgery'))!),
     }
   });
-  if (!res.data.success) exit(1);
+  if (!res.data.success) {
+    console.log('Login failed');
+    exit(1);
+  }
   setCookies(res.headers);
 
   res = await axios.post('https://eclaim.slichealth.com/Upload/GetFreshDischarges', {}, {
@@ -100,7 +103,10 @@ async function main() {
       ),
     }
   });
-  if (!res.data.success) exit(2);
+  if (!res.data.success) {
+    console.log('Getting fresh discharges failed');
+    exit(1);
+  }
   setCookies(res.headers);
 
   freshDischarges = res.data.responseData.items;
@@ -204,7 +210,6 @@ async function doPatient(patient: Patient) {
 async function getPatients() {
   const patients: Patient[] = [];
   const patientFolders = await fs.readdir(patientsPath);
-  console.log(patientFolders);
 
   patientLoop: for (const patientFolder of patientFolders) {
     const visitNoMatch = patientFolder.match(/.+?(\d+)/);
@@ -243,7 +248,6 @@ async function getPatients() {
     }
     patients.push(patient);
   }
-  console.log(patients);
 
   return patients;
 }
