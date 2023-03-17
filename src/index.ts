@@ -243,6 +243,7 @@ async function getPatients() {
     }
     patients.push(patient);
   }
+  console.log(patients);
 
   return patients;
 }
