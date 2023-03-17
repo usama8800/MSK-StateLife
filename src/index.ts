@@ -204,6 +204,7 @@ async function doPatient(patient: Patient) {
 async function getPatients() {
   const patients: Patient[] = [];
   const patientFolders = await fs.readdir(patientsPath);
+  console.log(patientFolders);
 
   patientLoop: for (const patientFolder of patientFolders) {
     const visitNoMatch = patientFolder.match(/.+?(\d+)/);
