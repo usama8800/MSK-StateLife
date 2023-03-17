@@ -226,6 +226,7 @@ async function getPatients() {
 
     const names = await fs.readdir(resolve(patientsPath, patientFolder));
     for (const name of names) {
+      if (name.endsWith('.pdf')) continue;
       const pathname = resolve(patientsPath, patientFolder, name);
       const nameMatch = name.match(/^(\d+)/);
       const stat = await fs.stat(pathname);
