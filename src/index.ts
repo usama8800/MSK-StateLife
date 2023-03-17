@@ -172,7 +172,7 @@ async function doPatient(patient: Patient) {
     console.log(`${patient.name}: Warning! file size > 15 MB`);
   }
 
-  const path = resolve('patients', patient.name, patient.visitNo + '.pdf');
+  const path = resolve(patientsPath, patient.name, patient.visitNo + '.pdf');
   await fs.writeFile(path, doc.pdf);
   const formData = new FormData();
   formData.append('file', fsLame.createReadStream(path), { contentType: 'application/pdf' });
