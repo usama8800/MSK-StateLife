@@ -228,7 +228,7 @@ async function getPatients() {
       if (name.endsWith('.pdf')) continue;
       const pathname = resolve(patientsPath, patientFolder, name);
       const nameMatch = name.match(/^(\d+)/);
-      const stat = await fs.stat(pathname);
+      let stat = await fs.stat(pathname);
       if (!nameMatch) {
         console.log(`${patientFolder} has bad folder or file name '${name}'`);
         continue patientLoop;
@@ -241,7 +241,16 @@ async function getPatients() {
 
       if (stat.isDirectory()) {
         const filenames = await fs.readdir(pathname);
-        patient[docType] = filenames.map(f => resolve(pathname, f));
+        for (let i = 0; i < filenames.length; i++) {
+          filenames[i] = resolve(pathname, filenames[i]);
+          stat = await fs.stat(filenames[i]);
+          if (stat.isDirectory()) {
+            console.log(`${patientFolder} has a folder inside '${name}'`);
+            continue patientLoop;
+          }
+        }
+
+        patient[docType] = filenames;
       } else {
         patient[docType] = [pathname];
       }
