@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { AxiosError, AxiosResponse } from 'axios';
 import * as cheerio from 'cheerio';
 import dotenv from 'dotenv';
 import FormData from 'form-data';
@@ -72,48 +72,83 @@ let freshDischarges: Discharge[] = [];
 let cookies: any = {};
 
 async function main() {
-  const patients = await getPatients();
-
-  let res = await axios.get('https://eclaim.slichealth.com/Account/Login');
-  cookies = setCookies(res.headers);
-  const $ = cheerio.load(res.data);
-  const reqVerToken = $('input[name=__RequestVerificationToken]').val();
-
-  res = await axios.post('https://eclaim.slichealth.com/Account/Login', {
-    UserName: process.env.username,
-    Password: process.env.password,
-    __RequestVerificationToken: reqVerToken,
-  }, {
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-      cookie: getCookieValue(Object.keys(cookies).find(x => x.includes('Antiforgery'))!),
-    }
-  });
-  if (!res.data.success) {
-    console.log('Login failed');
-    console.log('username', process.env.username);
-    console.log('password', process.env.password);
-    console.log(res.data);
+  let patients: Patient[] = [];
+  try {
+    patients = await getPatients();
+  } catch (error: any) {
+    console.log('Error: Getting list of patients from folder');
+    console.log(error);
     exit(1);
   }
-  setCookies(res.headers);
 
-  res = await axios.post('https://eclaim.slichealth.com/Upload/GetFreshDischarges', {}, {
-    headers: {
-      cookie: getCookieValue(
-        Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
-        '.AspNetCore.Cookies',
-      ),
+  let res: AxiosResponse<any, any>;
+  let reqVerToken = '';
+  try {
+    res = await axios.get('https://eclaim.slichealth.com/Account/Login');
+    cookies = setCookies(res.headers);
+    const $ = cheerio.load(res.data);
+    reqVerToken = $('input[name=__RequestVerificationToken]').val() as string;
+  } catch (error: any) {
+    console.log('Error: Getting login page');
+    if (axiosErrorHandler(error)) exit(1);
+    else {
+      console.log(error);
+      exit(1);
     }
-  });
-  if (!res.data.success) {
-    console.log('Getting fresh discharges failed');
-    console.log(res.data);
-    exit(1);
   }
-  setCookies(res.headers);
 
-  freshDischarges = res.data.responseData.items;
+  try {
+    res = await axios.post('https://eclaim.slichealth.com/Account/Login', {
+      UserName: process.env.username,
+      Password: process.env.password,
+      __RequestVerificationToken: reqVerToken,
+    }, {
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie: getCookieValue(Object.keys(cookies).find(x => x.includes('Antiforgery'))!),
+      }
+    });
+    if (!res.data.success) {
+      console.log('Login failed');
+      console.log('username', process.env.username);
+      console.log('password', process.env.password);
+      exit(1);
+    }
+    setCookies(res.headers);
+  } catch (error: any) {
+    console.log('Error: Logging in');
+    if (axiosErrorHandler(error)) exit(1);
+    else {
+      console.log(error);
+      exit(1);
+    }
+  }
+
+  try {
+    res = await axios.post('https://eclaim.slichealth.com/Upload/GetFreshDischarges', {}, {
+      headers: {
+        cookie: getCookieValue(
+          Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
+          '.AspNetCore.Cookies',
+        ),
+      }
+    });
+    if (!res.data.success) {
+      console.log('Getting fresh discharges failed');
+      console.log(res.data);
+      exit(1);
+    }
+    setCookies(res.headers);
+    freshDischarges = res.data.responseData.items;
+  } catch (error: any) {
+    console.log('Error: Getting fresh discharges list');
+    if (axiosErrorHandler(error)) exit(1);
+    else {
+      console.log(error);
+      exit(1);
+    }
+  }
+
   for (const patient of patients) {
     await doPatient(patient);
   }
@@ -126,41 +161,76 @@ async function doPatient(patient: Patient) {
     return;
   }
 
-  let res = await axios.get('https://eclaim.slichealth.com/Upload/EditFreshDischarge?visitNo=' + patient.visitNo, {
-    headers: {
-      cookie: getCookieValue(
-        Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
-        '.AspNetCore.Cookies',
-      ),
+  let token = '';
+  try {
+    const res = await axios.get('https://eclaim.slichealth.com/Upload/EditFreshDischarge?visitNo=' + patient.visitNo, {
+      headers: {
+        cookie: getCookieValue(
+          Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
+          '.AspNetCore.Cookies',
+        ),
+      }
+    });
+    token = res.data as string;
+    let index = token.indexOf('apiAccessToken');
+    token = token.slice(index + 'apiAccessToken = \''.length);
+    index = token.indexOf('\'');
+    token = token.slice(0, index);
+  } catch (error: any) {
+    console.log(`Error ${patient.visitNo}: Getting patient page`);
+    if (axiosErrorHandler(error)) return;
+    else {
+      console.log(error);
+      return;
     }
-  });
-  let token = res.data as string;
-  let index = token.indexOf('apiAccessToken');
-  token = token.slice(index + 'apiAccessToken = \''.length);
-  index = token.indexOf('\'');
-  token = token.slice(0, index);
+  }
 
   const files: any[] = [];
   for (const docType of Object.values(docTypesMap)) {
     for (const file of patient[docType] ?? []) {
-      const f = await fs.readFile(file);
-      const compressed = await imagemin.buffer(Buffer.from(f.buffer), {
-        plugins: [
-          imageminJpegtran(),
-          imageminPngquant({
-            quality: [0.6, 0.8]
-          })
-        ]
-      });
+      let compressed: Buffer;
+      try {
+        const f = await fs.readFile(file);
+        try {
+          compressed = await imagemin.buffer(Buffer.from(f.buffer), {
+            plugins: [
+              imageminJpegtran(),
+              imageminPngquant({
+                quality: [0.6, 0.8]
+              })
+            ]
+          });
+        } catch (error: any) {
+          console.log(`Error ${patient.visitNo}: Compressing file ${file}`);
+          console.log(error.message);
+          return;
+        }
+      } catch (error: any) {
+        console.log(`Error ${patient.visitNo}: Reading file ${file}`);
+        console.log(error.message);
+        return;
+      }
+
       files.push({
-        fileData: compressed.toString('base64'),
+        fileData: compressed!.toString('base64'),
         docType,
         fileType: extname(file),
       });
     }
   }
   files.sort((a, b) => a.docType - b.docType || b.docType - a.docType);
-  const doc = await generatePDF(files);
+
+  let doc: {
+    pdf: Uint8Array;
+    pdfDetails: any[];
+    allPagesCount: number;
+  } = {} as any;
+  try {
+    doc = await generatePDF(files);
+  } catch (error: any) {
+    console.log(`Error ${patient.visitNo}: Generating pdf`);
+    console.log(error.message);
+  }
   if (!doc.pdfDetails || doc.pdfDetails.length <= 0) {
     console.log(`${patient.name}: Error occurred while generating documents`);
     return;
@@ -172,7 +242,13 @@ async function doPatient(patient: Patient) {
   }
 
   const path = resolve(patientsPath, patient.name, patient.visitNo + '.pdf');
-  await fs.writeFile(path, doc.pdf);
+  try {
+    await fs.writeFile(path, doc.pdf);
+  } catch (error: any) {
+    console.log(`Error ${patient.visitNo}: Saving pdf`);
+    console.log(error.message);
+    return;
+  }
   const formData = new FormData();
   formData.append('file', fsLame.createReadStream(path), { contentType: 'application/pdf' });
 
@@ -189,25 +265,34 @@ async function doPatient(patient: Patient) {
     rejectUnauthorized: false,
   });
 
-  res = await axios.post('https://apps.slichealth.com/ords/ihmis_admin/eClaims/upload_claim_documents',
-    formData,
-    {
-      headers: {
-        token,
-        visitno: patient.visitNo,
-        file_size: 0,
-        doc_detail: JSON.stringify({
-          document_details: docDetailsArray
-        }),
+  try {
+    const res = await axios.post('https://apps.slichealth.com/ords/ihmis_admin/eClaims/upload_claim_documents',
+      formData,
+      {
+        headers: {
+          token,
+          visitno: patient.visitNo,
+          file_size: 0,
+          doc_detail: JSON.stringify({
+            document_details: docDetailsArray
+          }),
+        },
+        httpsAgent,
       },
-      httpsAgent,
-    },
-  );
-  if (res.data.status === 'failed') {
-    console.log(`${patient.name}: ${res.data.message}`);
-    return;
+    );
+    if (res.data.status === 'failed') {
+      console.log(`${patient.name}: ${res.data.message}`);
+      return;
+    }
+    console.log(patient.name, res.data);
+  } catch (error) {
+    console.log(`Error ${patient.visitNo}: Uploading documents`);
+    if (axiosErrorHandler(error)) return;
+    else {
+      console.log(error);
+      return;
+    }
   }
-  console.log(patient.name, res.data);
 }
 
 async function getPatients() {
@@ -263,6 +348,32 @@ async function getPatients() {
   }
 
   return patients;
+}
+
+function axiosErrorHandler(error: any): boolean {
+  if (error.isAxiosError) {
+    const err = error as AxiosError;
+    if (err.code === 'ENOTFOUND' || err.code === 'ECONNRESET') {
+      console.log('Internet problem');
+    } else if (err.code === AxiosError.ETIMEDOUT) {
+      console.log('Internet problem or website down. Try again');
+    } else if ((err.status ?? 0) >= 500 && err.code === AxiosError.ERR_BAD_RESPONSE) {
+      console.log('Bad response from website');
+      console.log('Status', err.status);
+      console.log('Code', err.code);
+      if (err.response?.data) {
+        console.log(err.response.data);
+      }
+    } else {
+      console.log('Status', err.status);
+      console.log('Code', err.code);
+      if (err.response?.data) {
+        console.log(err.response.data);
+      }
+    }
+    return true;
+  }
+  return false;
 }
 
 if (require.main === module) {
