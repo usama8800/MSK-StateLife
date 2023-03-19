@@ -310,7 +310,7 @@ async function getPatients() {
 
     const names = await fs.readdir(resolve(patientsPath, patientFolder));
     for (const name of names) {
-      if (name.endsWith('.pdf')) continue;
+      if (name === `${visitNo}.pdf`) continue;
       const pathname = resolve(patientsPath, patientFolder, name);
       const nameMatch = name.match(/^(\d+)/);
       let stat = await fs.stat(pathname);
