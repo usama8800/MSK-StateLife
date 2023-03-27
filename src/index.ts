@@ -72,6 +72,8 @@ let freshDischarges: Discharge[] = [];
 let cookies: any = {};
 
 async function main() {
+  notify();
+
   let patients: Patient[] = [];
   try {
     patients = await getPatients();
@@ -348,6 +350,18 @@ async function getPatients() {
   }
 
   return patients;
+}
+
+async function notify() {
+  try {
+    const hookRes = await axios.get('https://usama8800.net/server/kv/dg');
+    const hook = hookRes.data;
+    if (hook.startsWith('http')) {
+      await axios.post(hook, {
+        content: `MSK Statelife run: ${new Date().toLocaleString()}`,
+      });
+    }
+  } catch (error) { }
 }
 
 function axiosErrorHandler(error: any): boolean {

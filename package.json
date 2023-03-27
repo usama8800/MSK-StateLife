@@ -5,8 +5,8 @@
   "scripts": {
     "dev": "nodemon",
     "build": "tsc",
-    "start": "node ./out/index.js",
-    "run": "tsc && node ./out/index.js"
+    "start": "npm run run",
+    "run": "npm run build && node ./out/index.js"
   },
   "author": "",
   "license": "ISC",
