@@ -453,8 +453,11 @@ function axiosErrorHandler(error: any): boolean {
 }
 
 if (require.main === module) {
-  if (process.argv.length === 3) {
-    patientsPath = process.argv[2];
+  if (process.argv.length > 2) {
+    patientsPath = process.argv.slice(2).join(' ');
+    if (!patientsPath.startsWith('"') && patientsPath.endsWith('"'))
+      patientsPath = patientsPath.slice(0, -1);
+    patientsPath = patientsPath.replace(/\^([^^])?/g, '$1');
   } else {
     console.log('Folder not given. Using ./patients');
   }

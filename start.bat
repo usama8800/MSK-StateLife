@@ -1,3 +1,4 @@
 git pull
 cmd.exe /c npm install
-npm start
+cmd.exe /c npm run build
+node ./out/index.js %*
