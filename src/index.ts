@@ -182,7 +182,7 @@ async function main() {
     const book = XLSX.utils.book_new();
     const sheet = XLSX.utils.aoa_to_sheet(aoa);
     XLSX.utils.book_append_sheet(book, sheet, 'Objected Claims');
-    XLSX.writeFile(book, 'objected_claims.xlsx');
+    XLSX.writeFile(book, 'Objected Claims.xlsx');
     console.log('Objected claims list saved');
 
     if (!res.data.success) {
