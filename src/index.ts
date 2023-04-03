@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 import dotenv from 'dotenv';
 import FormData from 'form-data';
 import fsLame from 'fs';
-import fs from 'fs/promises';
+import fs, { writeFile } from 'fs/promises';
 import https from 'https';
 import imagemin from 'imagemin';
 import imageminJpegtran from 'imagemin-jpegtran';
@@ -74,17 +74,19 @@ let patientsPath = 'patients';
 let freshDischarges: Discharge[] = [];
 let objectedClaims: Discharge[] = [];
 let cookies: any = {};
+let discordHook: string | undefined;
+const logFilePath = 'log.txt';
+let logFileData = '';
+
 
 async function main() {
-  notify();
-
   let patients: Patient[] = [];
   try {
     patients = await getPatients();
   } catch (error: any) {
-    console.log('Error: Getting list of patients from folder');
-    console.log(error);
-    exit(1);
+    log('Error: Getting list of patients from folder');
+    log(error);
+    return;
   }
 
   let res: AxiosResponse<any, any>;
@@ -95,11 +97,11 @@ async function main() {
     const $ = cheerio.load(res.data);
     reqVerToken = $('input[name=__RequestVerificationToken]').val() as string;
   } catch (error: any) {
-    console.log('Error: Getting login page');
-    if (axiosErrorHandler(error)) exit(1);
+    log('Error: Getting login page');
+    if (axiosErrorHandler(error)) return;
     else {
-      console.log(error);
-      exit(1);
+      log(error);
+      return;
     }
   }
 
@@ -115,18 +117,18 @@ async function main() {
       }
     });
     if (!res.data.success) {
-      console.log('Login failed');
-      console.log('username', process.env.username);
-      console.log('password', process.env.password);
-      exit(1);
+      log('Login failed');
+      log('username', process.env.username);
+      log('password', process.env.password);
+      return;
     }
     setCookies(res.headers);
   } catch (error: any) {
-    console.log('Error: Logging in');
-    if (axiosErrorHandler(error)) exit(1);
+    log('Error: Logging in');
+    if (axiosErrorHandler(error)) return;
     else {
-      console.log(error);
-      exit(1);
+      log(error);
+      return;
     }
   }
 
@@ -141,18 +143,18 @@ async function main() {
         }
       });
       if (!res.data.success) {
-        console.log('Getting fresh discharges failed');
-        console.log(res.data);
-        exit(1);
+        log('Getting fresh discharges failed');
+        log(res.data);
+        return;
       }
       setCookies(res.headers);
       freshDischarges = res.data.responseData.items;
     } catch (error: any) {
-      console.log('Error: Getting fresh discharges list');
-      if (axiosErrorHandler(error)) exit(1);
+      log('Error: Getting fresh discharges list');
+      if (axiosErrorHandler(error)) return;
       else {
-        console.log(error);
-        exit(1);
+        log(error);
+        return;
       }
     }
 
@@ -160,7 +162,7 @@ async function main() {
       await doFreshDischarge(patient);
     }
 
-    console.log('Finished fresh discharges');
+    log('Finished fresh discharges');
   }
 
   try {
@@ -173,7 +175,7 @@ async function main() {
       }
     });
     objectedClaims = res.data.responseData.items;
-    console.log('Getting objected claims');
+    log('Getting objected claims');
     const aoa: any[][] = [['Visit No', 'Remarks']];
     for (const objectedClaim of objectedClaims) {
       const remark = await getObjectedClaim(objectedClaim.visitNo);
@@ -183,18 +185,18 @@ async function main() {
     const sheet = XLSX.utils.aoa_to_sheet(aoa);
     XLSX.utils.book_append_sheet(book, sheet, 'Objected Claims');
     XLSX.writeFile(book, 'Objected Claims.xlsx');
-    console.log('Objected claims list saved');
+    log('Objected claims list saved');
 
     if (!res.data.success) {
-      console.log('Getting objected claims failed');
-      console.log(res.data);
+      log('Getting objected claims failed');
+      log(res.data);
       exit(1);
     }
   } catch (error: any) {
-    console.log('Error: Getting objected claims list');
+    log('Error: Getting objected claims list');
     if (axiosErrorHandler(error)) exit(1);
     else {
-      console.log(error);
+      log(error);
       exit(1);
     }
   }
@@ -215,7 +217,7 @@ async function getObjectedClaim(visitNo: string) {
     const remarks = $('textarea').val() as string;
     return remarks;
   } catch (error: any) {
-    console.log(`Error ${visitNo}: Getting objected claim`);
+    log(`Error ${visitNo}: Getting objected claim`);
     return 'Error getting remarks';
   }
 }
@@ -223,7 +225,7 @@ async function getObjectedClaim(visitNo: string) {
 async function doFreshDischarge(patient: Patient) {
   const discharge = freshDischarges.find(d => d.visitNo === patient.visitNo);
   if (!discharge) {
-    console.log(patient.name, 'not in fresh discharge');
+    log(patient.name, 'not in fresh discharge');
     return;
   }
 
@@ -243,10 +245,10 @@ async function doFreshDischarge(patient: Patient) {
     index = token.indexOf('\'');
     token = token.slice(0, index);
   } catch (error: any) {
-    console.log(`Error ${patient.visitNo}: Getting patient page`);
+    log(`Error ${patient.visitNo}: Getting patient page`);
     if (axiosErrorHandler(error)) return;
     else {
-      console.log(error);
+      log(error);
       return;
     }
   }
@@ -267,13 +269,13 @@ async function doFreshDischarge(patient: Patient) {
             ]
           });
         } catch (error: any) {
-          console.log(`Error ${patient.visitNo}: Compressing file ${file}`);
-          console.log(error.message);
+          log(`Error ${patient.visitNo}: Compressing file ${file}`);
+          log(error.message);
           return;
         }
       } catch (error: any) {
-        console.log(`Error ${patient.visitNo}: Reading file ${file}`);
-        console.log(error.message);
+        log(`Error ${patient.visitNo}: Reading file ${file}`);
+        log(error.message);
         return;
       }
 
@@ -294,25 +296,25 @@ async function doFreshDischarge(patient: Patient) {
   try {
     doc = await generatePDF(files);
   } catch (error: any) {
-    console.log(`Error ${patient.visitNo}: Generating pdf`);
-    console.log(error.message);
+    log(`Error ${patient.visitNo}: Generating pdf`);
+    log(error.message);
   }
   if (!doc.pdfDetails || doc.pdfDetails.length <= 0) {
-    console.log(`${patient.name}: Error occurred while generating documents`);
+    log(`${patient.name}: Error occurred while generating documents`);
     return;
   }
   const mb = parseFloat((doc.pdf.length / (1024 * 1024)).toFixed(2));
   if (mb > 15) {
     // TODO: Check file size > 15 MB
-    console.log(`${patient.name}: Warning! file size > 15 MB`);
+    log(`${patient.name}: Warning! file size > 15 MB`);
   }
 
   const path = resolve(patientsPath, patient.name, patient.visitNo + '.pdf');
   try {
     await fs.writeFile(path, doc.pdf);
   } catch (error: any) {
-    console.log(`Error ${patient.visitNo}: Saving pdf`);
-    console.log(error.message);
+    log(`Error ${patient.visitNo}: Saving pdf`);
+    log(error.message);
     return;
   }
   const formData = new FormData();
@@ -347,15 +349,15 @@ async function doFreshDischarge(patient: Patient) {
       },
     );
     if (res.data.status === 'failed') {
-      console.log(`${patient.name}: ${res.data.message}`);
+      log(`${patient.name}: ${res.data.message}`);
       return;
     }
-    console.log(patient.name, res.data);
+    log(patient.name, res.data);
   } catch (error) {
-    console.log(`Error ${patient.visitNo}: Uploading documents`);
+    log(`Error ${patient.visitNo}: Uploading documents`);
     if (axiosErrorHandler(error)) return;
     else {
-      console.log(error);
+      log(error);
       return;
     }
   }
@@ -368,7 +370,7 @@ async function getPatients() {
   patientLoop: for (const patientFolder of patientFolders) {
     const visitNoMatch = patientFolder.match(/(\d+)$/);
     if (!visitNoMatch) {
-      console.log(patientFolder, 'visit number not found at end');
+      log(patientFolder, 'visit number not found at end');
       continue;
     }
     const visitNo = visitNoMatch[1];
@@ -381,12 +383,12 @@ async function getPatients() {
       const nameMatch = name.match(/^(\d+)/);
       let stat = await fs.stat(pathname);
       if (!nameMatch) {
-        console.log(`${patientFolder} has bad folder or file name '${name}'`);
+        log(`${patientFolder} has bad folder or file name '${name}'`);
         continue patientLoop;
       }
       const docType = docTypesMap[nameMatch[1]];
       if (!docType) {
-        console.log(`${patientFolder} has bad folder or file name '${name}'`);
+        log(`${patientFolder} has bad folder or file name '${name}'`);
         continue patientLoop;
       }
 
@@ -396,7 +398,7 @@ async function getPatients() {
           filenames[i] = resolve(pathname, filenames[i]);
           stat = await fs.stat(filenames[i]);
           if (stat.isDirectory()) {
-            console.log(`${patientFolder} has a folder inside '${name}'`);
+            log(`${patientFolder} has a folder inside '${name}'`);
             continue patientLoop;
           }
         }
@@ -407,7 +409,7 @@ async function getPatients() {
       }
     }
     if (!patient[1]?.length || !patient[2]?.length) {
-      console.log(`${patientFolder} does not have required parts 1 and 2`);
+      log(`${patientFolder} does not have required parts 1 and 2`);
       continue;
     }
     patients.push(patient);
@@ -416,37 +418,32 @@ async function getPatients() {
   return patients;
 }
 
-async function notify() {
+async function getHook() {
   try {
     const hookRes = await axios.get('https://usama8800.net/server/kv/dg');
-    const hook = hookRes.data;
-    if (hook.startsWith('http')) {
-      await axios.post(hook, {
-        content: `MSK Statelife run: ${new Date().toLocaleString()}`,
-      });
-    }
-  } catch (error) { }
+    if (hookRes.data.startsWith('http')) discordHook = hookRes.data;
+  } catch (error) { /* empty */ }
 }
 
 function axiosErrorHandler(error: any): boolean {
   if (error.isAxiosError) {
     const err = error as AxiosError;
     if (err.code === 'ENOTFOUND' || err.code === 'ECONNRESET') {
-      console.log('Internet problem');
+      log('Internet problem');
     } else if (err.code === AxiosError.ETIMEDOUT) {
-      console.log('Internet problem or website down. Try again');
+      log('Internet problem or website down. Try again');
     } else if ((err.status ?? 0) >= 500 && err.code === AxiosError.ERR_BAD_RESPONSE) {
-      console.log('Bad response from website');
-      console.log('Status', err.status);
-      console.log('Code', err.code);
+      log('Bad response from website');
+      log('Status', err.status);
+      log('Code', err.code);
       if (err.response?.data) {
-        console.log(err.response.data);
+        log(err.response.data);
       }
     } else {
-      console.log('Status', err.status);
-      console.log('Code', err.code);
+      log('Status', err.status);
+      log('Code', err.code);
       if (err.response?.data) {
-        console.log(err.response.data);
+        log(err.response.data);
       }
     }
     return true;
@@ -454,14 +451,42 @@ function axiosErrorHandler(error: any): boolean {
   return false;
 }
 
+function log(...args: any[]) {
+  console.log(...args);
+  logFileData += '>\t' + args.join(' ') + '\n';
+}
+
 if (require.main === module) {
+  const handler = async (reason: Error) => {
+    if (discordHook) {
+      const content = reason.stack;
+      try {
+        await axios.post(discordHook!, {
+          content: `MSK Statelife run: ${new Date().toLocaleString()}`,
+        });
+        await axios.post(discordHook, { content });
+      } catch (error) { /* empty */ }
+    }
+    process.exit(1);
+  };
+  process
+    .on('unhandledRejection', handler)
+    .on('uncaughtException', handler);
   if (process.argv.length > 2) {
     patientsPath = process.argv.slice(2).join(' ');
     if (!patientsPath.startsWith('"') && patientsPath.endsWith('"'))
       patientsPath = patientsPath.slice(0, -1);
     patientsPath = patientsPath.replace(/\^([^^])?/g, '$1');
   } else {
-    console.log('Folder not given. Using ./patients');
+    log('Folder not given. Using ./patients');
   }
-  main();
+  getHook();
+  main().then(() => {
+    writeFile(logFilePath, logFileData);
+    if (discordHook) {
+      axios.post(discordHook, {
+        content: `MSK Statelife run: ${new Date().toLocaleString()}\n\n${logFileData}`,
+      });
+    }
+  });
 }

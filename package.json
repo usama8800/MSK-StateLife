@@ -6,7 +6,7 @@
     "dev": "nodemon",
     "build": "tsc",
     "start": "npm run run",
-    "run": "npm run build && node ./out/index.js"
+    "run": "ts-node src/index.ts"
   },
   "author": "",
   "license": "ISC",
