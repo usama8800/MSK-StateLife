@@ -130,36 +130,38 @@ async function main() {
     }
   }
 
-  try {
-    res = await axios.post('https://eclaim.slichealth.com/Upload/GetFreshDischarges', {}, {
-      headers: {
-        cookie: getCookieValue(
-          Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
-          '.AspNetCore.Cookies',
-        ),
+  if (patients.length) {
+    try {
+      res = await axios.post('https://eclaim.slichealth.com/Upload/GetFreshDischarges', {}, {
+        headers: {
+          cookie: getCookieValue(
+            Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
+            '.AspNetCore.Cookies',
+          ),
+        }
+      });
+      if (!res.data.success) {
+        console.log('Getting fresh discharges failed');
+        console.log(res.data);
+        exit(1);
       }
-    });
-    if (!res.data.success) {
-      console.log('Getting fresh discharges failed');
-      console.log(res.data);
-      exit(1);
+      setCookies(res.headers);
+      freshDischarges = res.data.responseData.items;
+    } catch (error: any) {
+      console.log('Error: Getting fresh discharges list');
+      if (axiosErrorHandler(error)) exit(1);
+      else {
+        console.log(error);
+        exit(1);
+      }
     }
-    setCookies(res.headers);
-    freshDischarges = res.data.responseData.items;
-  } catch (error: any) {
-    console.log('Error: Getting fresh discharges list');
-    if (axiosErrorHandler(error)) exit(1);
-    else {
-      console.log(error);
-      exit(1);
+
+    for (const patient of patients) {
+      await doFreshDischarge(patient);
     }
-  }
 
-  for (const patient of patients) {
-    await doFreshDischarge(patient);
+    console.log('Finished fresh discharges');
   }
-
-  console.log('Finished fresh discharges');
 
   try {
     res = await axios.post('https://eclaim.slichealth.com/Upload/GetObjectedClaims', {}, {
