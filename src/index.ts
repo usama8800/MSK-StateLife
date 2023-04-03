@@ -10,6 +10,9 @@ import imageminJpegtran from 'imagemin-jpegtran';
 import imageminPngquant from 'imagemin-pngquant';
 import { extname, resolve } from 'path';
 import { exit } from 'process';
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
+import * as XLSX from 'xlsx';
 import { generatePDF, getCookieValue, setCookies } from './utils';
 
 dotenv.config({ override: true });
@@ -69,6 +72,7 @@ const docTypesMap = {
 
 let patientsPath = 'patients';
 let freshDischarges: Discharge[] = [];
+let objectedClaims: Discharge[] = [];
 let cookies: any = {};
 
 async function main() {
@@ -152,11 +156,69 @@ async function main() {
   }
 
   for (const patient of patients) {
-    await doPatient(patient);
+    await doFreshDischarge(patient);
+  }
+
+  console.log('Finished fresh discharges');
+
+  try {
+    res = await axios.post('https://eclaim.slichealth.com/Upload/GetObjectedClaims', {}, {
+      headers: {
+        cookie: getCookieValue(
+          Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
+          '.AspNetCore.Cookies',
+        ),
+      }
+    });
+    objectedClaims = res.data.responseData.items;
+    console.log('Getting objected claims');
+    const aoa: any[][] = [['Visit No', 'Remarks']];
+    for (const objectedClaim of objectedClaims) {
+      const remark = await getObjectedClaim(objectedClaim.visitNo);
+      aoa.push([objectedClaim.visitNo, remark]);
+    }
+    const book = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet(aoa);
+    XLSX.utils.book_append_sheet(book, sheet, 'Objected Claims');
+    XLSX.writeFile(book, 'objected_claims.xlsx');
+    console.log('Objected claims list saved');
+
+    if (!res.data.success) {
+      console.log('Getting objected claims failed');
+      console.log(res.data);
+      exit(1);
+    }
+  } catch (error: any) {
+    console.log('Error: Getting objected claims list');
+    if (axiosErrorHandler(error)) exit(1);
+    else {
+      console.log(error);
+      exit(1);
+    }
   }
 }
 
-async function doPatient(patient: Patient) {
+async function getObjectedClaim(visitNo: string) {
+  let res: AxiosResponse<any, any>;
+  try {
+    res = await axios.get(`https://eclaim.slichealth.com/Upload/EditObjectedClaim?visitNo=${visitNo}`, {
+      headers: {
+        cookie: getCookieValue(
+          Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
+          '.AspNetCore.Cookies',
+        ),
+      }
+    });
+    const $ = cheerio.load(res.data);
+    const remarks = $('textarea').val() as string;
+    return remarks;
+  } catch (error: any) {
+    console.log(`Error ${visitNo}: Getting objected claim`);
+    return 'Error getting remarks';
+  }
+}
+
+async function doFreshDischarge(patient: Patient) {
   const discharge = freshDischarges.find(d => d.visitNo === patient.visitNo);
   if (!discharge) {
     console.log(patient.name, 'not in fresh discharge');
