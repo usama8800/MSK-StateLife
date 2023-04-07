@@ -12,6 +12,8 @@ import { extname, resolve } from 'path';
 import { exit } from 'process';
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
+import dayjs from 'dayjs';
+import * as os from 'os';
 import * as XLSX from 'xlsx';
 import { generatePDF, getCookieValue, setCookies } from './utils';
 
@@ -218,6 +220,7 @@ async function getObjectedClaim(visitNo: string) {
     return remarks;
   } catch (error: any) {
     log(`Error ${visitNo}: Getting objected claim`);
+    appendLogFile('```' + JSON.stringify(error) + '```');
     return 'Error getting remarks';
   }
 }
@@ -453,18 +456,26 @@ function axiosErrorHandler(error: any): boolean {
 
 function log(...args: any[]) {
   console.log(...args);
-  logFileData += '>\t' + args.join(' ') + '\n';
+  appendLogFile(args.map(x => {
+    if (typeof x === 'object') return JSON.stringify(x);
+    return x;
+  }).join(' '));
+}
+
+function appendLogFile(str: string) {
+  logFileData += `>>>\t${str}\n`;
 }
 
 if (require.main === module) {
+  const date = dayjs().format();
+  const header = `**MSK Statelife** @ _${os.userInfo().username}_ | _${os.hostname()}_: \`${date}\`\n`;
   const handler = async (reason: Error) => {
     if (discordHook) {
       const content = reason.stack;
       try {
         await axios.post(discordHook!, {
-          content: `MSK Statelife run: ${new Date().toLocaleString()}`,
+          content: `${header}\`\`\`${content}\`\`\``,
         });
-        await axios.post(discordHook, { content });
       } catch (error) { /* empty */ }
     }
     process.exit(1);
@@ -478,14 +489,14 @@ if (require.main === module) {
       patientsPath = patientsPath.slice(0, -1);
     patientsPath = patientsPath.replace(/\^([^^])?/g, '$1');
   } else {
-    log('Folder not given. Using ./patients');
+    // log('Folder not given. Using ./patients');
   }
   getHook();
   main().then(() => {
     writeFile(logFilePath, logFileData);
     if (discordHook) {
       axios.post(discordHook, {
-        content: `MSK Statelife run: ${new Date().toLocaleString()}\n\n${logFileData}`,
+        content: `${header}${logFileData}`,
       });
     }
   });
