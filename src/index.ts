@@ -1,5 +1,6 @@
 import axios, { AxiosError, AxiosResponse } from 'axios';
 import * as cheerio from 'cheerio';
+import dayjs from 'dayjs';
 import dotenv from 'dotenv';
 import FormData from 'form-data';
 import fsLame from 'fs';
@@ -8,12 +9,9 @@ import https from 'https';
 import imagemin from 'imagemin';
 import imageminJpegtran from 'imagemin-jpegtran';
 import imageminPngquant from 'imagemin-pngquant';
+import * as os from 'os';
 import { extname, resolve } from 'path';
 import { exit } from 'process';
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-import dayjs from 'dayjs';
-import * as os from 'os';
 import * as XLSX from 'xlsx';
 import { generatePDF, getCookieValue, setCookies } from './utils';
 
@@ -72,7 +70,16 @@ const docTypesMap = {
   11: '16',
 };
 
-let patientsPath = 'patients';
+const config = {
+  folder: 'patients',
+  freshDischarges: true,
+  objectedClaims: true,
+  forceDischarge: false,
+};
+if (process.env.MODE === 'dev') {
+  config.objectedClaims = false;
+  config.forceDischarge = true;
+}
 let freshDischarges: Discharge[] = [];
 let objectedClaims: Discharge[] = [];
 let cookies: any = {};
@@ -82,15 +89,6 @@ let logFileData = '';
 
 
 async function main() {
-  let patients: Patient[] = [];
-  try {
-    patients = await getPatients();
-  } catch (error: any) {
-    log('Error: Getting list of patients from folder');
-    log(error);
-    return;
-  }
-
   let res: AxiosResponse<any, any>;
   let reqVerToken = '';
   try {
@@ -134,9 +132,52 @@ async function main() {
     }
   }
 
-  if (patients.length) {
+  if (config.freshDischarges) {
+    let patients: Patient[] = [];
     try {
-      res = await axios.post('https://eclaim.slichealth.com/Upload/GetFreshDischarges', {}, {
+      patients = await getPatients();
+    } catch (error: any) {
+      log('Error: Getting list of patients from folder');
+      log(error);
+      return;
+    }
+    if (patients.length) {
+      try {
+        res = await axios.post('https://eclaim.slichealth.com/Upload/GetFreshDischarges', {}, {
+          headers: {
+            cookie: getCookieValue(
+              Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
+              '.AspNetCore.Cookies',
+            ),
+          }
+        });
+        if (!res.data.success) {
+          log('Getting fresh discharges failed');
+          log(res.data);
+          return;
+        }
+        setCookies(res.headers);
+        freshDischarges = res.data.responseData.items;
+      } catch (error: any) {
+        log('Error: Getting fresh discharges list');
+        if (axiosErrorHandler(error)) return;
+        else {
+          log(error);
+          return;
+        }
+      }
+
+      for (const patient of patients) {
+        await doFreshDischarge(patient);
+      }
+
+      log('Finished fresh discharges');
+    }
+  }
+
+  if (config.objectedClaims) {
+    try {
+      res = await axios.post('https://eclaim.slichealth.com/Upload/GetObjectedClaims', {}, {
         headers: {
           cookie: getCookieValue(
             Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
@@ -144,67 +185,36 @@ async function main() {
           ),
         }
       });
-      if (!res.data.success) {
-        log('Getting fresh discharges failed');
-        log(res.data);
-        return;
+      objectedClaims = res.data.responseData.items;
+      log('Getting objected claims');
+      const aoa: any[][] = [['Visit No', 'Remarks']];
+      for (const objectedClaim of objectedClaims) {
+        const remark = await getObjectedClaim(objectedClaim.visitNo);
+        aoa.push([objectedClaim.visitNo, remark]);
       }
-      setCookies(res.headers);
-      freshDischarges = res.data.responseData.items;
+      const book = XLSX.utils.book_new();
+      const sheet = XLSX.utils.aoa_to_sheet(aoa);
+      XLSX.utils.book_append_sheet(book, sheet, 'Objected Claims');
+      XLSX.writeFile(book, 'Objected Claims.xlsx');
+      log('Objected claims list saved');
+
+      if (!res.data.success) {
+        log('Getting objected claims failed');
+        log(res.data);
+        exit(1);
+      }
     } catch (error: any) {
-      log('Error: Getting fresh discharges list');
-      if (axiosErrorHandler(error)) return;
+      log('Error: Getting objected claims list');
+      if (axiosErrorHandler(error)) exit(1);
       else {
         log(error);
-        return;
+        exit(1);
       }
-    }
-
-    for (const patient of patients) {
-      await doFreshDischarge(patient);
-    }
-
-    log('Finished fresh discharges');
-  }
-
-  try {
-    res = await axios.post('https://eclaim.slichealth.com/Upload/GetObjectedClaims', {}, {
-      headers: {
-        cookie: getCookieValue(
-          Object.keys(cookies).find(x => x.includes('Antiforgery'))!,
-          '.AspNetCore.Cookies',
-        ),
-      }
-    });
-    objectedClaims = res.data.responseData.items;
-    log('Getting objected claims');
-    const aoa: any[][] = [['Visit No', 'Remarks']];
-    for (const objectedClaim of objectedClaims) {
-      const remark = await getObjectedClaim(objectedClaim.visitNo);
-      aoa.push([objectedClaim.visitNo, remark]);
-    }
-    const book = XLSX.utils.book_new();
-    const sheet = XLSX.utils.aoa_to_sheet(aoa);
-    XLSX.utils.book_append_sheet(book, sheet, 'Objected Claims');
-    XLSX.writeFile(book, 'Objected Claims.xlsx');
-    log('Objected claims list saved');
-
-    if (!res.data.success) {
-      log('Getting objected claims failed');
-      log(res.data);
-      exit(1);
-    }
-  } catch (error: any) {
-    log('Error: Getting objected claims list');
-    if (axiosErrorHandler(error)) exit(1);
-    else {
-      log(error);
-      exit(1);
     }
   }
 }
 
-async function getObjectedClaim(visitNo: string) {
+async function getObjectedClaim(visitNo: string, retry = 0) {
   let res: AxiosResponse<any, any>;
   try {
     res = await axios.get(`https://eclaim.slichealth.com/Upload/EditObjectedClaim?visitNo=${visitNo}`, {
@@ -217,17 +227,21 @@ async function getObjectedClaim(visitNo: string) {
     });
     const $ = cheerio.load(res.data);
     const remarks = $('textarea').val() as string;
+    log(`${visitNo}: ${remarks}`);
     return remarks;
   } catch (error: any) {
+    if (retry < 3) {
+      return await getObjectedClaim(visitNo, retry + 1);
+    }
     log(`Error ${visitNo}: Getting objected claim`);
-    appendLogFile('```' + JSON.stringify(error) + '```');
+    appendLogFile('```' + JSON.stringify(error, null, 2) + '```');
     return 'Error getting remarks';
   }
 }
 
 async function doFreshDischarge(patient: Patient) {
   const discharge = freshDischarges.find(d => d.visitNo === patient.visitNo);
-  if (!discharge) {
+  if (!discharge && !config.forceDischarge) {
     log(patient.name, 'not in fresh discharge');
     return;
   }
@@ -312,7 +326,7 @@ async function doFreshDischarge(patient: Patient) {
     log(`${patient.name}: Warning! file size > 15 MB`);
   }
 
-  const path = resolve(patientsPath, patient.name, patient.visitNo + '.pdf');
+  const path = resolve(config.folder, patient.name, patient.visitNo + '.pdf');
   try {
     await fs.writeFile(path, doc.pdf);
   } catch (error: any) {
@@ -368,7 +382,7 @@ async function doFreshDischarge(patient: Patient) {
 
 async function getPatients() {
   const patients: Patient[] = [];
-  const patientFolders = await fs.readdir(patientsPath);
+  const patientFolders = await fs.readdir(config.folder);
 
   patientLoop: for (const patientFolder of patientFolders) {
     const visitNoMatch = patientFolder.match(/(\d+)$/);
@@ -379,10 +393,10 @@ async function getPatients() {
     const visitNo = visitNoMatch[1];
     const patient: Patient = { visitNo, name: patientFolder };
 
-    const names = await fs.readdir(resolve(patientsPath, patientFolder));
+    const names = await fs.readdir(resolve(config.folder, patientFolder));
     for (const name of names) {
       if (name === `${visitNo}.pdf`) continue;
-      const pathname = resolve(patientsPath, patientFolder, name);
+      const pathname = resolve(config.folder, patientFolder, name);
       const nameMatch = name.match(/^(\d+)/);
       let stat = await fs.stat(pathname);
       if (!nameMatch) {
@@ -470,6 +484,7 @@ if (require.main === module) {
   const date = dayjs().format();
   const header = `**MSK Statelife** @ _${os.userInfo().username}_ | _${os.hostname()}_: \`${date}\`\n`;
   const handler = async (reason: Error) => {
+    console.log(reason);
     if (discordHook) {
       const content = reason.stack;
       try {
@@ -484,10 +499,11 @@ if (require.main === module) {
     .on('unhandledRejection', handler)
     .on('uncaughtException', handler);
   if (process.argv.length > 2) {
-    patientsPath = process.argv.slice(2).join(' ');
+    let patientsPath = process.argv.slice(2).join(' ');
     if (!patientsPath.startsWith('"') && patientsPath.endsWith('"'))
       patientsPath = patientsPath.slice(0, -1);
     patientsPath = patientsPath.replace(/\^([^^])?/g, '$1');
+    config.folder = patientsPath;
   } else {
     // log('Folder not given. Using ./patients');
   }

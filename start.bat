@@ -1,3 +1,3 @@
 git pull
 cmd.exe /c npm install
-npm start %*
+npx ts-node src/index.ts %*
