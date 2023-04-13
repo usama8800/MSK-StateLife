@@ -486,10 +486,14 @@ if (require.main === module) {
   const handler = async (reason: Error) => {
     console.log(reason);
     if (discordHook) {
-      const content = reason.stack;
+      let content = reason.stack;
+      if ((reason as any).isAxiosError) {
+        const aErr = reason as AxiosError;
+        content += `\n${JSON.stringify(aErr.toJSON(), null, 2)}`;
+      }
       try {
         await axios.post(discordHook!, {
-          content: `${header}\`\`\`${content}\`\`\``,
+          content: `${header}\nUncaught Error\`\`\`${content}\`\`\``,
         });
       } catch (error) { /* empty */ }
     }
