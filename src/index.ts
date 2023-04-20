@@ -87,7 +87,6 @@ let discordHook: string | undefined;
 const logFilePath = 'log.txt';
 let logFileData = '';
 
-
 async function main() {
   let res: AxiosResponse<any, any>;
   let reqVerToken = '';
@@ -483,17 +482,21 @@ function appendLogFile(str: string) {
 if (require.main === module) {
   const date = dayjs().format();
   const header = `**MSK Statelife** @ _${os.userInfo().username}_ | _${os.hostname()}_: \`${date}\`\n`;
-  const handler = async (reason: Error) => {
-    console.log(reason);
-    if (discordHook) {
-      let content = reason.stack;
+  const c = '```';
+  let handlingSigInt = false;
+  const handler = async (reason: any) => {
+    if (handlingSigInt) return;
+    if (!reason.isSigInt) console.log(reason);
+    if (reason.isSigInt) handlingSigInt = true;
+    if (discordHook && process.env.MODE !== 'dev') {
+      let content = reason.isSigInt ? `SIGINT\n${c}${logFileData}${c}` : `Uncaught Error\n${c}${reason.stack}${c}`;
       if ((reason as any).isAxiosError) {
         const aErr = reason as AxiosError;
-        content += `\n${JSON.stringify(aErr.toJSON(), null, 2)}`;
+        content += `\n${c}${JSON.stringify(aErr.toJSON(), null, 2)}${c}`;
       }
       try {
         await axios.post(discordHook!, {
-          content: `${header}\nUncaught Error\`\`\`${content}\`\`\``,
+          content: `${header}\n${content}`,
         });
       } catch (error) { /* empty */ }
     }
@@ -501,7 +504,8 @@ if (require.main === module) {
   };
   process
     .on('unhandledRejection', handler)
-    .on('uncaughtException', handler);
+    .on('uncaughtException', handler)
+    .on('SIGINT', () => handler({ isSigInt: true }));
   if (process.argv.length > 2) {
     let patientsPath = process.argv.slice(2).join(' ');
     if (!patientsPath.startsWith('"') && patientsPath.endsWith('"'))
@@ -511,10 +515,10 @@ if (require.main === module) {
   } else {
     // log('Folder not given. Using ./patients');
   }
-  getHook();
+  if (process.env.MODE !== 'dev') getHook();
   main().then(() => {
     writeFile(logFilePath, logFileData);
-    if (discordHook) {
+    if (discordHook && process.env.MODE !== 'dev') {
       axios.post(discordHook, {
         content: `${header}${logFileData}`,
       });

@@ -54,7 +54,7 @@ export async function generatePDF(fileArray) {
 
 const cookies: any = {};
 export function setCookies(headers) {
-  if (!headers['set-cookie']) return;
+  if (!headers['set-cookie']) return cookies;
 
   for (const cookiepies of headers['set-cookie']) {
     let cookieName: string | undefined = undefined;
@@ -77,7 +77,8 @@ export function setCookies(headers) {
 export function getCookieValue(...cookieNames: string[]) {
   let ret = '';
   for (const cookieName of cookieNames) {
-    ret += `${cookieName}=${cookies[cookieName].value}; `;
+    if (cookies[cookieName])
+      ret += `${cookieName}=${cookies[cookieName].value}; `;
   }
   return ret;
 }
