@@ -4,5 +4,5 @@
         "src"
     ],
     "ext": "ts",
-    "exec": "node -r ts-node/register ./src/index.ts"
+    "exec": "tsx ./src/pw.ts"
 }

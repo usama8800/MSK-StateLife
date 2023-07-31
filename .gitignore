@@ -5,3 +5,6 @@ pat ients
 out
 log.txt
 Objected Claims.xlsx
+/test-results/
+/playwright-report/
+/playwright/.cache/

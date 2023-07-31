@@ -1,4 +1,17 @@
+import * as cheerio from 'cheerio';
 import * as PDFLib from 'pdf-lib';
+
+export function formInputs(form: cheerio.Cheerio<cheerio.Element>) {
+  return form.get().map((input) => {
+    const attr = input.attribs;
+    return {
+      name: attr.name,
+      id: attr.id,
+      for: attr['data-for'],
+      value: attr.value,
+    };
+  });
+}
 
 export async function generatePDF(fileArray) {
   let allPagesCount = 0;
