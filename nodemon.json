@@ -4,5 +4,5 @@
         "src"
     ],
     "ext": "ts",
-    "exec": "tsx ./src/pw.ts"
+    "exec": "tsx ./src/index.ts"
 }

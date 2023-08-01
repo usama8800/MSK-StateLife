@@ -7,7 +7,7 @@
     "dev": "nodemon",
     "build": "tsc",
     "start": "npm run run",
-    "run": "tsx src/pw.ts",
+    "run": "tsx src/index.ts",
     "postinstall": "tsx src/prepare.ts"
   },
   "author": "",
