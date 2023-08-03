@@ -1,6 +1,8 @@
+import { convertWordFiles } from 'convert-multiple-files';
 import dayjs from 'dayjs';
 import dotenv from 'dotenv';
-import fs from 'fs/promises';
+import fsE from 'fs-extra';
+import fsP from 'fs/promises';
 import fetch from 'node-fetch';
 import * as os from 'os';
 import path from 'path';
@@ -91,19 +93,20 @@ async function repeatUntil(repeat: any, until: any) {
 }
 
 async function getPatients() {
+  log('Reading patients folder...');
   const patients: Patient[] = [];
-  const patientFolders = await fs.readdir(config.folder);
+  const patientFolders = await fsP.readdir(config.folder);
 
   patientLoop: for (const patientFolder of patientFolders) {
     const visitNoMatch = patientFolder.match(/(\d+)$/);
     if (!visitNoMatch) {
-      log(patientFolder, 'visit number not found at end');
+      log(`'${patientFolder}' visit number not found at end`);
       continue;
     }
     const visitNo = visitNoMatch[1];
     const patient: Patient = { visitNo, name: patientFolder, docs: {} };
 
-    const names = await fs.readdir(path.resolve(config.folder, patientFolder));
+    const names = await fsP.readdir(path.resolve(config.folder, patientFolder));
     for (let name of names) {
       let pathname = path.resolve(config.folder, patientFolder, name);
       const nameMatch = name.match(/^(\d+)/);
@@ -121,26 +124,26 @@ async function getPatients() {
         continue patientLoop;
       }
 
-      let stat = await fs.stat(pathname);
+      let stat = await fsP.stat(pathname);
       if (stat.isDirectory() && !config.convertToPDF) {
         log(`${patientFolder} has a directory '${name}'. Should be a pdf file`);
         continue patientLoop;
       } else if (stat.isDirectory()) {
         const mergedPdf = await PDFLib.PDFDocument.create();
-        const filenames = await fs.readdir(pathname);
+        const filenames = await fsP.readdir(pathname);
         if (filenames.length === 0) {
           log(`${patientFolder} has an empty folder '${name}'`);
           continue patientLoop;
         }
         for (let i = 0; i < filenames.length; i++) {
           const filepath = path.resolve(pathname, filenames[i]);
-          stat = await fs.stat(filepath);
+          stat = await fsP.stat(filepath);
           if (stat.isDirectory()) {
             log(`${patientFolder} has a folder inside '${name}'`);
             continue patientLoop;
           }
           if (filepath.endsWith('.jpg') || filepath.endsWith('.jpeg')) {
-            const jpgImage = await mergedPdf.embedJpg(await fs.readFile(filepath));
+            const jpgImage = await mergedPdf.embedJpg(await fsP.readFile(filepath));
             const page = mergedPdf.addPage();
             page.drawImage(jpgImage, {
               x: 0,
@@ -149,9 +152,25 @@ async function getPatients() {
               height: page.getHeight(),
             });
           } else if (filepath.endsWith('.pdf')) {
-            const pdf = await fs.readFile(filepath);
+            const pdf = await fsP.readFile(filepath);
             const document = await PDFLib.PDFDocument.load(pdf);
-            await mergedPdf.copyPages(document, document.getPageIndices());
+            const copiedPages = await mergedPdf.copyPages(document, document.getPageIndices());
+            copiedPages.forEach((page) => mergedPdf.addPage(page));
+          } else if (filepath.endsWith('.docx') || filepath.endsWith('.doc')) {
+            const tmpPath = path.resolve(os.tmpdir(), 'tmp.docx');
+            await fsP.copyFile(filepath, tmpPath);
+            await fsE.remove(path.resolve(os.tmpdir(), 'tmp.pdf'));
+            const newFile = await convertWordFiles(tmpPath, 'pdf', os.tmpdir());
+            const exists = await fsE.exists(newFile);
+            if (!exists) {
+              console.log(filepath, pathname);
+              log(`${patientFolder} has a bad file '${filenames[i]}' inside '${name}'`);
+              continue patientLoop;
+            }
+            const pdf = await fsP.readFile(newFile);
+            const document = await PDFLib.PDFDocument.load(pdf);
+            const copiedPages = await mergedPdf.copyPages(document, document.getPageIndices());
+            copiedPages.forEach((page) => mergedPdf.addPage(page));
           } else {
             log(`${patientFolder} has a bad file '${filenames[i]}' inside '${name}'`);
             continue patientLoop;
@@ -160,14 +179,14 @@ async function getPatients() {
         const pdfBytes = await mergedPdf.save();
         name = nameMatch[1] + '.pdf';
         pathname = path.resolve(config.folder, patientFolder, name);
-        await fs.writeFile(pathname, pdfBytes);
+        await fsP.writeFile(pathname, pdfBytes);
       } else if (name.endsWith('.jpg') || name.endsWith('.jpeg')) {
         if (!config.convertToPDF) {
           log(`${patientFolder} has a jpg file '${name}'. Should be a pdf file`);
           continue patientLoop;
         }
         const mergedPdf = await PDFLib.PDFDocument.create();
-        const jpgImage = await mergedPdf.embedJpg(await fs.readFile(pathname));
+        const jpgImage = await mergedPdf.embedJpg(await fsP.readFile(pathname));
         const page = mergedPdf.addPage();
         page.drawImage(jpgImage, {
           x: 0,
@@ -178,7 +197,7 @@ async function getPatients() {
         const pdfBytes = await mergedPdf.save();
         name = nameMatch[1] + '.pdf';
         pathname = path.resolve(config.folder, patientFolder, name);
-        await fs.writeFile(pathname, pdfBytes);
+        await fsP.writeFile(pathname, pdfBytes);
       }
       patient.docs[docType] = pathname;
     }
@@ -217,6 +236,7 @@ async function main() {
 
   if (config.freshDischarges) {
     const patients = await getPatients();
+    log('Uploading fresh discharges...');
     for (const patient of patients) {
       await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/compress-upload?p14_visitno=${patient.visitNo}&session=${session}`, { timeout: 60000 });
       for (const docType of Object.keys(patient.docs)) {
@@ -234,7 +254,7 @@ async function main() {
       const json = await response.json();
       if (json.status !== 'success') {
         if (json.message.includes('Claim Already Recieved')) {
-          log(`${patient.visitNo}: Error! ${json.message}`);
+          log(`${patient.visitNo}: Already uploaded`);
         } else {
           log(`${patient.visitNo}: Error! ${json.message}`);
         }
@@ -310,7 +330,7 @@ async function main() {
       bookType: 'xlsx',
       type: 'buffer',
     });
-    await fs.writeFile(path.resolve(__dirname, '..', 'Objected Claims.xlsx'), fileBuffer);
+    await fsP.writeFile(path.resolve(__dirname, '..', 'Objected Claims.xlsx'), fileBuffer);
     log('Objected Claims.xlsx saved');
   }
 
@@ -358,7 +378,7 @@ if (process.argv.length > 2) {
 }
 if (process.env.MODE !== 'dev') getHook();
 main().then(() => {
-  fs.writeFile(logFilePath, logFileData);
+  fsP.writeFile(logFilePath, logFileData);
   if (discordHook && process.env.MODE !== 'dev') {
     fetch(discordHook!, {
       method: 'POST',
