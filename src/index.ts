@@ -14,19 +14,14 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 let discordHook: string | undefined;
 const logFilePath = 'log.txt';
 let logFileData = '';
+const envOrDefault = (key: string, defaultValue: boolean) => process.env[key] ? process.env[key]?.toLowerCase() === 'true' : defaultValue;
 const config = {
   folder: 'patients',
-  freshDischarges: true,
-  objectedClaims: true,
-  convertToPDF: true,
-  headless: process.env.MODE !== 'dev',
+  freshDischarges: envOrDefault('FRESH_DISCHARGES', true),
+  objectedClaims: envOrDefault('OBJECTED_CLAIMS', true),
+  convertToPDF: envOrDefault('CONVERT_TO_PDF', true),
+  headless: envOrDefault('HEADLESS', process.env.MODE !== 'dev'),
 };
-if (process.env.MODE === 'dev') {
-  config.freshDischarges = true;
-  config.objectedClaims = true;
-  config.headless = true;
-  // config.convertToPDF = true;
-}
 
 interface Patient {
   visitNo: string;
@@ -133,6 +128,10 @@ async function getPatients() {
       } else if (stat.isDirectory()) {
         const mergedPdf = await PDFLib.PDFDocument.create();
         const filenames = await fs.readdir(pathname);
+        if (filenames.length === 0) {
+          log(`${patientFolder} has an empty folder '${name}'`);
+          continue patientLoop;
+        }
         for (let i = 0; i < filenames.length; i++) {
           const filepath = path.resolve(pathname, filenames[i]);
           stat = await fs.stat(filepath);
@@ -140,39 +139,46 @@ async function getPatients() {
             log(`${patientFolder} has a folder inside '${name}'`);
             continue patientLoop;
           }
-          const page = mergedPdf.addPage();
-          const jpgImage = await mergedPdf.embedJpg(await fs.readFile(filepath));
-          page.drawImage(jpgImage, {
-            x: 0,
-            y: 0,
-            width: page.getWidth(),
-            height: page.getHeight(),
-          });
+          if (filepath.endsWith('.jpg') || filepath.endsWith('.jpeg')) {
+            const jpgImage = await mergedPdf.embedJpg(await fs.readFile(filepath));
+            const page = mergedPdf.addPage();
+            page.drawImage(jpgImage, {
+              x: 0,
+              y: 0,
+              width: page.getWidth(),
+              height: page.getHeight(),
+            });
+          } else if (filepath.endsWith('.pdf')) {
+            const pdf = await fs.readFile(filepath);
+            const document = await PDFLib.PDFDocument.load(pdf);
+            await mergedPdf.copyPages(document, document.getPageIndices());
+          } else {
+            log(`${patientFolder} has a bad file '${filenames[i]}' inside '${name}'`);
+            continue patientLoop;
+          }
         }
         const pdfBytes = await mergedPdf.save();
         name = nameMatch[1] + '.pdf';
         pathname = path.resolve(config.folder, patientFolder, name);
         await fs.writeFile(pathname, pdfBytes);
-      } else {
-        if (name.endsWith('.jpg') || name.endsWith('.jpeg')) {
-          if (!config.convertToPDF) {
-            log(`${patientFolder} has a jpg file '${name}'. Should be a pdf file`);
-            continue patientLoop;
-          }
-          const mergedPdf = await PDFLib.PDFDocument.create();
-          const jpgImage = await mergedPdf.embedJpg(await fs.readFile(pathname));
-          const page = mergedPdf.addPage();
-          page.drawImage(jpgImage, {
-            x: 0,
-            y: 0,
-            width: page.getWidth(),
-            height: page.getHeight(),
-          });
-          const pdfBytes = await mergedPdf.save();
-          name = nameMatch[1] + '.pdf';
-          pathname = path.resolve(config.folder, patientFolder, name);
-          await fs.writeFile(pathname, pdfBytes);
+      } else if (name.endsWith('.jpg') || name.endsWith('.jpeg')) {
+        if (!config.convertToPDF) {
+          log(`${patientFolder} has a jpg file '${name}'. Should be a pdf file`);
+          continue patientLoop;
         }
+        const mergedPdf = await PDFLib.PDFDocument.create();
+        const jpgImage = await mergedPdf.embedJpg(await fs.readFile(pathname));
+        const page = mergedPdf.addPage();
+        page.drawImage(jpgImage, {
+          x: 0,
+          y: 0,
+          width: page.getWidth(),
+          height: page.getHeight(),
+        });
+        const pdfBytes = await mergedPdf.save();
+        name = nameMatch[1] + '.pdf';
+        pathname = path.resolve(config.folder, patientFolder, name);
+        await fs.writeFile(pathname, pdfBytes);
       }
       patient.docs[docType] = pathname;
     }
@@ -193,7 +199,15 @@ async function main() {
   const context = await browser.newContext(devices['Desktop Chrome']);
   const page = await context.newPage();
 
-  await page.goto('https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/home');
+  try {
+    await page.goto('https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/home');
+  } catch (error: any) {
+    if (error.name === 'TimeoutError') {
+      log('TimeoutError. Internet or Website not working');
+      return;
+    }
+    throw error;
+  }
 
   await page.type('#P9999_USERNAME', process.env.username!);
   await page.type('#P9999_PASSWORD', process.env.password!);
@@ -204,13 +218,13 @@ async function main() {
   if (config.freshDischarges) {
     const patients = await getPatients();
     for (const patient of patients) {
-      await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/compress-upload?p14_visitno=${patient.visitNo}&session=${session}`, { timeout: 0 });
+      await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/compress-upload?p14_visitno=${patient.visitNo}&session=${session}`, { timeout: 60000 });
       for (const docType of Object.keys(patient.docs)) {
         await page.locator(`#${docType}`).setInputFiles(patient.docs[docType]);
       }
       await page.getByText('Preview').click();
-      const requestPromise = page.waitForRequest('https://apps.slichealth.com/ords/ihmis_admin/eclaim/eclaim_upload_fresh_docs', { timeout: 0 });
-      await page.locator('#uploadBtn').click({ timeout: 0 });
+      const requestPromise = page.waitForRequest('https://apps.slichealth.com/ords/ihmis_admin/eclaim/eclaim_upload_fresh_docs', { timeout: 60000 });
+      await page.locator('#uploadBtn').click({ timeout: 60000 });
       const request = await requestPromise;
       const response = await request.response();
       if (!response) {
@@ -219,13 +233,19 @@ async function main() {
       }
       const json = await response.json();
       if (json.status !== 'success') {
-        log(`${patient.visitNo}: Error! ${json.message}`);
+        if (json.message.includes('Claim Already Recieved')) {
+          log(`${patient.visitNo}: Error! ${json.message}`);
+        } else {
+          log(`${patient.visitNo}: Error! ${json.message}`);
+        }
         continue;
+      } else {
+        log(`${patient.visitNo}: Success!`);
       }
     }
   }
   if (config.objectedClaims) {
-    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 0 });
+    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 60000 });
     await page.addScriptTag({ path: path.resolve(__dirname, '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js') });
     await repeatUntil(
       () => page.getByRole('tab', { name: 'OBJECTED CASE' }).click(),
@@ -271,7 +291,7 @@ async function main() {
       ['Visit No', 'Description', 'Remarks'],
     ];
     for (const objectedCase of objectedCases) {
-      await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/objected-file-upload?p11_visitno=${objectedCase.Visitno}&session=${session}`, { timeout: 0 });
+      await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/objected-file-upload?p11_visitno=${objectedCase.Visitno}&session=${session}`, { timeout: 60000 });
       const desc = await page.locator('//table[@aria-label="Missing Docs"]//td[@headers="DESCRIPTION"]').allTextContents();
       const remarks = await page.locator('//table[@aria-label="Missing Docs"]//td[@headers="REMARKS"]').allTextContents();
       if (desc.length !== remarks.length) {

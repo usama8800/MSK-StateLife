@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon",
+    "test": "nodemon --config nodemon.test.json",
     "build": "tsc",
     "start": "npm run run",
     "run": "tsx src/index.ts",
