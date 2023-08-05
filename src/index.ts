@@ -7,12 +7,13 @@ import fetch from 'node-fetch';
 import * as os from 'os';
 import path from 'path';
 import * as PDFLib from 'pdf-lib';
-import { chromium, devices } from 'playwright';
+import { Page, chromium, devices } from 'playwright';
 import { fileURLToPath } from 'url';
 import * as XLSX from 'xlsx';
 
 dotenv.config({ override: true });
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const downloadsFolder = path.resolve(__dirname, '..', 'downloads');
 let discordHook: string | undefined;
 const logFilePath = 'log.txt';
 let logFileData = '';
@@ -20,7 +21,9 @@ const envOrDefault = (key: string, defaultValue: boolean) => process.env[key] ? 
 const config = {
   folder: 'patients',
   freshDischarges: envOrDefault('FRESH_DISCHARGES', true),
+  freshClaims: envOrDefault('FRESH_CLAIMS', true),
   objectedClaims: envOrDefault('OBJECTED_CLAIMS', true),
+  sumbittedClaims: envOrDefault('SUBMITTED_CLAIMS', true),
   convertToPDF: envOrDefault('CONVERT_TO_PDF', true),
   headless: envOrDefault('HEADLESS', process.env.MODE !== 'dev'),
 };
@@ -41,6 +44,18 @@ interface Patient {
     Other?: string;
     DeathReport?: string;
   }
+}
+interface Claim {
+  Visitno: number;
+  'Patient Name': string;
+  'Admission Date': string;
+  'Discharge Date': string;
+  Los: number;
+  'Discharge Type': string;
+  Lot: string;
+  Treatment: string;
+  'Claim Amount': number;
+  'Mr Number': number;
 }
 const docTypesMap = {
   1: 'Identification',
@@ -76,20 +91,66 @@ function appendLogFile(str: string) {
   logFileData += `>>>\t${str}\n`;
 }
 
+async function writeAOAtoXLSXFile(data: any[][], filename: string) {
+  const book = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet(data);
+  XLSX.utils.book_append_sheet(book, sheet, 'Fresh Claims');
+  const fileBuffer = XLSX.write(book, {
+    bookType: 'xlsx',
+    type: 'buffer',
+  });
+  await fsE.writeFile(path.resolve(__dirname, '..', 'downloads', `${filename}.xlsx`), fileBuffer);
+  log(`${filename}.xlsx saved`);
+}
+
 async function repeatUntil(repeat: any, until: any) {
-  let done = false;
   await repeat();
-  while (!done) {
+  while (true) {
     try {
       const ret = await until();
       if (ret === false) throw new Error('Repeat');
-      done = true;
+      break;
     } catch (error: any) {
       const id = error.name === 'Error' ? error.message : error.name;
       if (!['TimeoutError', 'Repeat'].includes(id)) throw error;
       await repeat();
     }
   }
+}
+
+async function openTab(page: Page, tab: string) {
+  await repeatUntil(
+    () => page.getByRole('tab', { name: tab }).click(),
+    async () => {
+      await page.waitForTimeout(100);
+      return await page.isVisible(`div[data-label="${tab}"]`);
+    });
+}
+
+async function goThroughPages(page: Page, tab: string) {
+  const cases: Claim[] = [];
+  const nextButtonXPath = `//div[@data-label="${tab}"]//table[2]//a[contains(text(), "Next")]`;
+  await repeatUntil(
+    async () => { },
+    async () => {
+      const spinners = await page.locator('.u-Processing').all();
+      await Promise.all(spinners.map(x => x.waitFor({ state: 'detached' })));
+      const _cases = await page.evaluate((_tab) => {
+        const win = window as any;
+        const table = win.$(`table[aria-label="${_tab}"]`)[0];
+        const sheet = win.XLSX.utils.table_to_sheet(table);
+        const json = win.XLSX.utils.sheet_to_json(sheet);
+        return json;
+      }, tab);
+      cases.push(..._cases);
+      const count = await page.locator(nextButtonXPath).count();
+      if (count === 0) return true;
+      await page.locator(nextButtonXPath).click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      return false;
+    },
+  );
+  return cases;
 }
 
 async function getPatients() {
@@ -264,74 +325,69 @@ async function main() {
       }
     }
   }
+  if (config.freshClaims) {
+    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 60000 });
+    await page.addScriptTag({ path: path.resolve(__dirname, '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js') });
+    await openTab(page, 'FRESH CASES');
+    const cases = await goThroughPages(page, 'FRESH CASES');
+    const aoa: string[][] = [
+      Object.keys(cases[0] ?? {}),
+    ];
+    for (const _case of cases) {
+      const a: string[] = [];
+      for (let j = 0; j < aoa[0].length; j++) {
+        a.push(_case[aoa[0][j]] ?? '');
+      }
+      aoa.push(a);
+    }
+    await writeAOAtoXLSXFile(aoa, 'Fresh Claims');
+  }
   if (config.objectedClaims) {
     await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 60000 });
     await page.addScriptTag({ path: path.resolve(__dirname, '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js') });
-    await repeatUntil(
-      () => page.getByRole('tab', { name: 'OBJECTED CASE' }).click(),
-      async () => {
-        await page.waitForTimeout(100);
-        return await page.isVisible('div[data-label="OBJECTED CASE"]');
-      });
-    const objectedCases: {
-      Visitno: number;
-      'Patient Name': string;
-      'Admission Date': string;
-      'Discharge Date': string;
-      Los: number;
-      'Discharge Type': string;
-      Lot: string;
-      Treatment: string;
-      'Claim Amount': number;
-      'Mr Number': number;
-    }[] = [];
-    const nextButtonXPath = '//div[@data-label="OBJECTED CASE"]//table[2]//a[contains(text(), "Next")]';
-    let i = 0;
-    await repeatUntil(
-      async () => {
-        if (i++ === 0) return;
-        const loading = page.locator('.u-Processing').waitFor({ state: 'attached' });
-        await page.locator(nextButtonXPath).click();
-        await loading;
-      },
-      async () => {
-        await page.locator('.u-Processing').waitFor({ state: 'detached' });
-        const cases = await page.evaluate(() => {
-          const win = window as any;
-          const table = win.$('table[aria-label="OBJECTED CASE"]')[0];
-          const sheet = win.XLSX.utils.table_to_sheet(table);
-          return win.XLSX.utils.sheet_to_json(sheet);
-        });
-        objectedCases.push(...cases);
-        return await page.locator(nextButtonXPath).count() === 0;
-      },
-    );
-
+    await openTab(page, 'OBJECTED CASE');
+    const cases = await goThroughPages(page, 'OBJECTED CASE');
     const aoa: string[][] = [
-      ['Visit No', 'Description', 'Remarks'],
+      [...Object.keys(cases[0] ?? {}), 'Description', 'Remarks'],
     ];
-    for (const objectedCase of objectedCases) {
-      await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/objected-file-upload?p11_visitno=${objectedCase.Visitno}&session=${session}`, { timeout: 60000 });
+    for (const _case of cases) {
+      await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/objected-file-upload?p11_visitno=${_case.Visitno}&session=${session}`, { timeout: 60000 });
       const desc = await page.locator('//table[@aria-label="Missing Docs"]//td[@headers="DESCRIPTION"]').allTextContents();
       const remarks = await page.locator('//table[@aria-label="Missing Docs"]//td[@headers="REMARKS"]').allTextContents();
+      const as: string[][] = [];
+      const a: string[] = [];
+      for (let j = 0; j < aoa[0].length - 2; j++) {
+        a.push(_case[aoa[0][j]] ?? '');
+      }
       if (desc.length !== remarks.length) {
-        log(`${objectedCase.Visitno}: Error! Desc and remarks length mismatch`);
-        aoa.push([`${objectedCase.Visitno}`, desc.join('\n'), remarks.join('\n')]);
+        log(`${_case.Visitno}: Error! Desc and remarks length mismatch`);
+        a.push(desc.join('\n'), remarks.join('\n'));
+        as.push(a);
       } else {
         for (let j = 0; j < desc.length; j++) {
-          aoa.push([`${objectedCase.Visitno}`, desc[j], remarks[j]]);
+          as.push([...a, desc[j], remarks[j]]);
         }
       }
+      aoa.push(...as);
     }
-    const book = XLSX.utils.book_new();
-    const sheet = XLSX.utils.aoa_to_sheet(aoa);
-    XLSX.utils.book_append_sheet(book, sheet, 'Objected Claims');
-    const fileBuffer = XLSX.write(book, {
-      bookType: 'xlsx',
-      type: 'buffer',
-    });
-    await fsP.writeFile(path.resolve(__dirname, '..', 'Objected Claims.xlsx'), fileBuffer);
-    log('Objected Claims.xlsx saved');
+    await writeAOAtoXLSXFile(aoa, 'Objected Claims');
+  }
+  if (config.sumbittedClaims) {
+    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 60000 });
+    await page.addScriptTag({ path: path.resolve(__dirname, '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js') });
+    await openTab(page, 'SUBMITTED CASE');
+    const cases = await goThroughPages(page, 'SUBMITTED CASE');
+    const aoa: string[][] = [
+      Object.keys(cases[0] ?? {}),
+    ];
+    for (const _case of cases) {
+      const a: string[] = [];
+      for (let j = 0; j < aoa[0].length; j++) {
+        a.push(_case[aoa[0][j]] ?? '');
+      }
+      aoa.push(a);
+    }
+    await writeAOAtoXLSXFile(aoa, 'Submitted Claims');
   }
 
   // Teardown
@@ -377,15 +433,15 @@ if (process.argv.length > 2) {
   // log('Folder not given. Using ./patients');
 }
 if (process.env.MODE !== 'dev') getHook();
-main().then(() => {
-  fsP.writeFile(logFilePath, logFileData);
-  if (discordHook && process.env.MODE !== 'dev') {
-    fetch(discordHook!, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        content: `${header}${logFileData}`,
-      }),
-    });
-  }
-});
+await fsE.ensureDir(downloadsFolder);
+await main();
+fsP.writeFile(logFilePath, logFileData);
+if (discordHook && process.env.MODE !== 'dev') {
+  fetch(discordHook!, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: `${header}${logFileData}`,
+    }),
+  });
+}
