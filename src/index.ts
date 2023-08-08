@@ -192,10 +192,7 @@ async function getPatients() {
       } else if (stat.isDirectory()) {
         const mergedPdf = await PDFLib.PDFDocument.create();
         const filenames = await fsP.readdir(pathname);
-        if (filenames.length === 0) {
-          log(`${patientFolder} has an empty folder '${name}'`);
-          continue patientLoop;
-        }
+        if (filenames.length === 0) continue patientLoop;
         for (let i = 0; i < filenames.length; i++) {
           const filepath = path.resolve(pathname, filenames[i]);
           stat = await fsP.stat(filepath);
