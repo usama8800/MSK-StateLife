@@ -361,16 +361,24 @@ async function main() {
         log(`${patient.visitNo}: Error! No response from uploading`);
         continue;
       }
-      const json = await response.json();
-      if (json.status !== 'success') {
-        if (json.message.includes('Claim Already Recieved')) {
-          log(`${patient.visitNo}: Already uploaded`);
+      try {
+        const json = await response.json();
+        if (json.status !== 'success') {
+          if (json.message.includes('Claim Already Recieved')) {
+            log(`${patient.visitNo}: Already uploaded`);
+          } else {
+            log(`${patient.visitNo}: Error! ${json.message}`);
+          }
+          continue;
         } else {
-          log(`${patient.visitNo}: Error! ${json.message}`);
+          log(`${patient.visitNo}: Success!`);
         }
-        continue;
-      } else {
-        log(`${patient.visitNo}: Success!`);
+      } catch (error) {
+        if (response.status() === 200) log(`${patient.visitNo}: Success!`);
+        else {
+          log(`${patient.visitNo}: Error!`);
+          log(error);
+        }
       }
     }
   }
