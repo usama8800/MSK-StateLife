@@ -26,6 +26,7 @@ const config = {
   sumbittedClaims: envOrDefault('SUBMITTED_CLAIMS', true),
   convertToPDF: envOrDefault('CONVERT_TO_PDF', true),
   headless: envOrDefault('HEADLESS', process.env.MODE !== 'dev'),
+  force: envOrDefault('FORCE', false),
 };
 
 interface Patient {
@@ -292,10 +293,32 @@ async function main() {
   await page.waitForURL(x => x.pathname === '/ords/ihmis_admin/r/eclaim-upload/home' && x.searchParams.has('session'));
   const session = new URL(page.url()).searchParams.get('session');
 
+  let freshCases: Claim[] = [];
+  if (config.freshClaims) {
+    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 60000 });
+    await page.addScriptTag({ path: path.resolve(__dirname, '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js') });
+    await openTab(page, 'FRESH CASES');
+    freshCases = await goThroughPages(page, 'FRESH CASES');
+    const aoa: string[][] = [
+      Object.keys(freshCases[0] ?? {}),
+    ];
+    for (const _case of freshCases) {
+      const a: string[] = [];
+      for (let j = 0; j < aoa[0].length; j++) {
+        a.push(_case[aoa[0][j]] ?? '');
+      }
+      aoa.push(a);
+    }
+    await writeAOAtoXLSXFile(aoa, 'Fresh Claims');
+  }
   if (config.freshDischarges) {
     const patients = await getPatients();
     log('Uploading fresh discharges...');
     for (const patient of patients) {
+      if (!config.force && freshCases.length > 0 && !freshCases.some(x => x.Visitno === +patient.visitNo)) {
+        log(`${patient.visitNo}: Not in fresh cases`);
+        continue;
+      }
       await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/compress-upload?p14_visitno=${patient.visitNo}&session=${session}`, { timeout: 60000 });
       for (const docType of Object.keys(patient.docs)) {
         await page.locator(`#${docType}`).setInputFiles(patient.docs[docType]);
@@ -321,23 +344,6 @@ async function main() {
         log(`${patient.visitNo}: Success!`);
       }
     }
-  }
-  if (config.freshClaims) {
-    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 60000 });
-    await page.addScriptTag({ path: path.resolve(__dirname, '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js') });
-    await openTab(page, 'FRESH CASES');
-    const cases = await goThroughPages(page, 'FRESH CASES');
-    const aoa: string[][] = [
-      Object.keys(cases[0] ?? {}),
-    ];
-    for (const _case of cases) {
-      const a: string[] = [];
-      for (let j = 0; j < aoa[0].length; j++) {
-        a.push(_case[aoa[0][j]] ?? '');
-      }
-      aoa.push(a);
-    }
-    await writeAOAtoXLSXFile(aoa, 'Fresh Claims');
   }
   if (config.objectedClaims) {
     await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 60000 });
