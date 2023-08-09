@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import { convertWordFiles } from 'convert-multiple-files';
 import dayjs from 'dayjs';
 import dotenv from 'dotenv';
@@ -90,6 +91,15 @@ function log(...args: any[]) {
 
 function appendLogFile(str: string) {
   logFileData += `>>>\t${str}\n`;
+}
+
+function getGitHash() {
+  try {
+    const hash = execSync('git rev-parse HEAD').toString().trim();
+    return hash;
+  } catch (error) {
+    return 'Unknown';
+  }
 }
 
 async function writeAOAtoXLSXFile(data: any[][], filename: string) {
@@ -343,9 +353,10 @@ async function main() {
   if (config.freshDischarges) {
     const patients = await getPatients();
     log(`Uploading ${patients.length} fresh discharges...`);
-    for (const patient of patients) {
+    for (let i = 0; i < patients.length; i++) {
+      const patient = patients[i];
       if (!config.force && freshCases.length > 0 && !freshCases.some(x => x.Visitno === +patient.visitNo)) {
-        log(`${patient.visitNo}: Not in fresh cases`);
+        log(`${i + 1} ${patient.visitNo}: Not in fresh cases`);
         continue;
       }
       await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/compress-upload?p14_visitno=${patient.visitNo}&session=${session}`, { timeout: 60000 });
@@ -358,25 +369,25 @@ async function main() {
       const request = await requestPromise;
       const response = await request.response();
       if (!response) {
-        log(`${patient.visitNo}: Error! No response from uploading`);
+        log(`${i + 1} ${patient.visitNo}: Error! No response from uploading`);
         continue;
       }
       try {
         const json = await response.json();
         if (json.status !== 'success') {
           if (json.message.includes('Claim Already Recieved')) {
-            log(`${patient.visitNo}: Already uploaded`);
+            log(`${i + 1} ${patient.visitNo}: Already uploaded`);
           } else {
-            log(`${patient.visitNo}: Error! ${json.message}`);
+            log(`${i + 1} ${patient.visitNo}: Error! ${json.message}`);
           }
           continue;
         } else {
-          log(`${patient.visitNo}: Success!`);
+          log(`${i + 1} ${patient.visitNo}: Success!`);
         }
       } catch (error) {
-        if (response.status() === 200) log(`${patient.visitNo}: Success!`);
+        if (response.status() === 200) log(`${i + 1} ${patient.visitNo}: Unkown Status`);
         else {
-          log(`${patient.visitNo}: Error!`);
+          log(`${i + 1} ${patient.visitNo}: Error!`);
           log(error);
         }
       }
@@ -438,7 +449,10 @@ async function main() {
 }
 
 const date = dayjs().format();
-const header = `**MSK Statelife** @ _${os.userInfo().username}_ | _${os.hostname()}_: \`${date}\`\n`;
+const hash = getGitHash();
+const header = `**MSK Statelife** @ _${os.userInfo().username}_ | _${os.hostname()}_: \`${date}\`\n`
+  + `${process.argv.join(' ')}\n`
+  + `Version: ${hash}\n`;
 const c = '```';
 let handlingSigInt = false;
 const handler = async (reason: any) => {
