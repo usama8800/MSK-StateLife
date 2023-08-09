@@ -61,15 +61,15 @@ interface Claim {
 const docTypesMap = {
   1: 'Identification',
   2: 'SLIC_Docs',
-  3: 'Radiology', // 6
-  4: 'Hosptial_DS', // 3
+  3: 'Radiology',
+  4: 'Hosptial_DS',
   5: 'Reserve_Fund',
-  6: 'Labs', // 5
-  7: 'Treatment_Sheet', // 4
-  8: 'Other', // 9
-  9: 'Sticker', // 7
+  6: 'Labs',
+  7: 'Treatment_Sheet',
+  8: 'Other',
+  9: 'Sticker',
   10: 'DeathReport',
-  11: 'Birth', // 8
+  11: 'Birth',
 };
 
 async function getHook() {
@@ -277,6 +277,35 @@ async function main() {
   const context = await browser.newContext(devices['Desktop Chrome']);
   const page = await context.newPage();
 
+  await page.route('**/*', route => {
+    if (!['document', 'script', 'xhr', 'fetch'].includes(route.request().resourceType())) return route.abort();
+    if (route.request().url() === 'https://apps.slichealth.com/ords/wwv_flow.ajax') {
+      const data = route.request().postData();
+      if (data && data.includes('p_widget_action=paginate')) {
+        const minMatch = data.match(/p_pg_min_row=(\d+)/);
+        const maxMatch = data.match(/p_pg_max_rows=(\d+)/);
+        const fetchedMatch = data.match(/p_pg_rows_fetched=(\d+)/);
+        if (minMatch && maxMatch && fetchedMatch) {
+          const min = parseInt(minMatch[1]);
+          const max = parseInt(maxMatch[1]);
+          const fetched = parseInt(fetchedMatch[1]);
+          if (min < 2 << 16 - 1) {
+            const newMax = 2 << 16 - 1;
+            // const newFetched = newMax - min;
+            const newData = data
+              .replace(`p_pg_max_rows=${max}`, `p_pg_max_rows=${newMax}`)
+              .replace(`p_pg_rows_fetched=${fetched}`, `p_pg_rows_fetched=${newMax}`);
+            route.continue({
+              postData: newData,
+            });
+            return;
+          }
+        }
+      }
+    }
+    return route.continue();
+  });
+
   try {
     await page.goto('https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/home');
   } catch (error: any) {
@@ -313,7 +342,7 @@ async function main() {
   }
   if (config.freshDischarges) {
     const patients = await getPatients();
-    log('Uploading fresh discharges...');
+    log(`Uploading ${patients.length} fresh discharges...`);
     for (const patient of patients) {
       if (!config.force && freshCases.length > 0 && !freshCases.some(x => x.Visitno === +patient.visitNo)) {
         log(`${patient.visitNo}: Not in fresh cases`);
@@ -394,10 +423,10 @@ async function main() {
   }
 
   // Teardown
-  if (config.headless) {
-    await context.close();
-    await browser.close();
-  }
+  // if (config.headless) {
+  await context.close();
+  await browser.close();
+  // }
 }
 
 const date = dayjs().format();
