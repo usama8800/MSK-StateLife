@@ -278,7 +278,7 @@ async function main() {
   const page = await context.newPage();
 
   await page.route('**/*', route => {
-    if (!['document', 'script', 'xhr', 'fetch'].includes(route.request().resourceType())) return route.abort();
+    if (route.request().resourceType() === 'font') return route.abort();
     if (route.request().url() === 'https://apps.slichealth.com/ords/wwv_flow.ajax') {
       const data = route.request().postData();
       if (data && data.includes('p_widget_action=paginate')) {
@@ -311,7 +311,7 @@ async function main() {
   } catch (error: any) {
     if (error.name === 'TimeoutError') {
       log('TimeoutError. Internet or Website not working');
-      return;
+      process.exit(0);
     }
     throw error;
   }
