@@ -147,12 +147,23 @@ async function goThroughPages(page: Page, tab: string) {
       const spinners = await page.locator('.u-Processing').all();
       await Promise.all(spinners.map(x => x.waitFor({ state: 'detached' })));
       const _cases = await page.evaluate((_tab) => {
-        const win = window as any;
-        const table = win.$(`table[aria-label="${_tab}"]`)[0];
-        const sheet = win.XLSX.utils.table_to_sheet(table);
-        const json = win.XLSX.utils.sheet_to_json(sheet);
-        return json;
+        try {
+          const win = window as any;
+          const table = win.$(`table[aria-label="${_tab}"]`)[0];
+          console.log(1, table);
+          const sheet = win.XLSX.utils.table_to_sheet(table);
+          console.log(2, sheet);
+          const json = win.XLSX.utils.sheet_to_json(sheet);
+          console.log(3, json);
+          return json;
+        } catch (error) {
+          return [];
+        }
       }, tab);
+      if (_cases.length === 0) {
+        if (process.env.MODE === 'dev') await page.pause();
+        return false;
+      }
       cases.push(..._cases);
       const count = await page.locator(nextButtonXPath).count();
       if (count === 0) return true;
