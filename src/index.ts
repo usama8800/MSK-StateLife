@@ -12,6 +12,9 @@ import { Page, chromium, devices } from 'playwright';
 import { fileURLToPath } from 'url';
 import * as XLSX from 'xlsx';
 
+// const token = twoFA.generateToken('XDQXYCP5AC6FA32FQXDGJSPBIDYNKK5W');
+// console.log(token);
+// process.exit();
 dotenv.config({ override: true });
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const downloadsFolder = path.resolve(__dirname, '..', 'downloads');
@@ -339,8 +342,10 @@ async function main() {
 
   await page.type('#P9999_USERNAME', process.env.username!);
   await page.type('#P9999_PASSWORD', process.env.password!);
-  await page.click('button[id]');
-  await page.waitForURL(x => x.pathname === '/ords/ihmis_admin/r/eclaim-upload/home' && x.searchParams.has('session'));
+  await page.focus('#P9999_CODE');
+  await page.waitForURL(x => x.pathname === '/ords/ihmis_admin/r/eclaim-upload/home' && x.searchParams.has('session'), {
+    timeout: 3 * 60 * 1000
+  });
   const session = new URL(page.url()).searchParams.get('session');
 
   let freshCases: Claim[] = [];
