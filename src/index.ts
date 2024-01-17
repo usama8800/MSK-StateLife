@@ -25,9 +25,9 @@ const envOrDefault = (key: string, defaultValue: boolean) => process.env[key] ? 
 const config = {
   folder: 'patients',
   freshDischarges: envOrDefault('FRESH_DISCHARGES', true),
-  freshClaims: envOrDefault('FRESH_CLAIMS', true),
+  freshClaims: false, //envOrDefault('FRESH_CLAIMS', true),
   objectedClaims: envOrDefault('OBJECTED_CLAIMS', true),
-  sumbittedClaims: envOrDefault('SUBMITTED_CLAIMS', true),
+  sumbittedClaims: false, //envOrDefault('SUBMITTED_CLAIMS', true),
   convertToPDF: envOrDefault('CONVERT_TO_PDF', true),
   headless: envOrDefault('HEADLESS', process.env.MODE !== 'dev'),
   force: envOrDefault('FORCE', false),
@@ -51,6 +51,7 @@ interface Patient {
   }
 }
 interface Claim {
+  Action: string;
   Visitno: number;
   'Patient Name': string;
   'Admission Date': string;
@@ -132,18 +133,9 @@ async function repeatUntil(repeat: any, until: any) {
   }
 }
 
-async function openTab(page: Page, tab: string) {
-  await repeatUntil(
-    () => page.getByRole('tab', { name: tab }).click(),
-    async () => {
-      await page.waitForTimeout(100);
-      return await page.isVisible(`div[data-label="${tab}"]`);
-    });
-}
-
 async function goThroughPages(page: Page, tab: string) {
   const cases: Claim[] = [];
-  const nextButtonXPath = `//div[@data-label="${tab}"]//table[2]//a[contains(text(), "Next")]`;
+  const nextButtonXPath = 'button[aria-label=\'Next\']';
   await repeatUntil(
     async () => { },
     async () => {
@@ -152,19 +144,27 @@ async function goThroughPages(page: Page, tab: string) {
       const _cases = await page.evaluate((_tab) => {
         try {
           const win = window as any;
-          const table = win.$(`table[aria-label="${_tab}"]`)[0];
-          console.log(1, table);
-          const sheet = win.XLSX.utils.table_to_sheet(table);
-          console.log(2, sheet);
-          const json = win.XLSX.utils.sheet_to_json(sheet);
-          console.log(3, json);
-          return json;
+          win.mytable = win.$('table[id$=\'_orig\']')[0];
+          console.log(1, win.mytable);
+          win.mysheet = win.XLSX.utils.table_to_sheet(win.mytable);
+          console.log(2, win.mysheet);
+          win.mykeys = Object.keys(win.mysheet);
+          win.mykeys.forEach(k => {
+            if (win.mysheet[k].l) {
+              win.mysheet[k].t = 's';
+              win.mysheet[k].v = win.mysheet[k].l.Target;
+            }
+          });
+          win.myjson = win.XLSX.utils.sheet_to_json(win.mysheet);
+          console.log(3, win.myjson);
+          return win.myjson;
         } catch (error) {
           return [];
         }
       }, tab);
       if (_cases.length === 0) {
-        if (process.env.MODE === 'dev') await page.pause();
+        // if (process.env.MODE === 'dev') await page.pause();
+        await page.waitForTimeout(1000000);
         return false;
       }
       cases.push(..._cases);
@@ -300,6 +300,7 @@ async function main() {
   });
   const context = await browser.newContext(devices['Desktop Chrome']);
   const page = await context.newPage();
+  await page.addInitScript({ path: path.resolve(__dirname, '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js') });
 
   await page.route('**/*', route => {
     if (route.request().resourceType() === 'font') return route.abort();
@@ -319,9 +320,7 @@ async function main() {
             const newData = data
               .replace(`p_pg_max_rows=${max}`, `p_pg_max_rows=${newMax}`)
               .replace(`p_pg_rows_fetched=${fetched}`, `p_pg_rows_fetched=${newMax}`);
-            route.continue({
-              postData: newData,
-            });
+            route.continue({ postData: newData });
             return;
           }
         }
@@ -331,7 +330,7 @@ async function main() {
   });
 
   try {
-    await page.goto('https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/home');
+    await page.goto('https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/home', { timeout: 60000 });
   } catch (error: any) {
     if (error.name === 'TimeoutError') {
       log('TimeoutError. Internet or Website not working');
@@ -342,7 +341,12 @@ async function main() {
 
   await page.type('#P9999_USERNAME', process.env.username!);
   await page.type('#P9999_PASSWORD', process.env.password!);
-  await page.focus('#P9999_CODE');
+  if (process.env.PERMANENT_2FA) {
+    await page.type('#P9999_CODE', process.env.PERMANENT_2FA);
+    await page.getByText('Sign In').click();
+  } else {
+    await page.focus('#P9999_CODE');
+  }
   await page.waitForURL(x => x.pathname === '/ords/ihmis_admin/r/eclaim-upload/home' && x.searchParams.has('session'), {
     timeout: 3 * 60 * 1000
   });
@@ -350,9 +354,7 @@ async function main() {
 
   let freshCases: Claim[] = [];
   if (config.freshClaims) {
-    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 60000 });
-    await page.addScriptTag({ path: path.resolve(__dirname, '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js') });
-    await openTab(page, 'FRESH CASES');
+    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/search-fresh-case-visitno?clear=4&session=${session}`, { timeout: 60000 });
     freshCases = await goThroughPages(page, 'FRESH CASES');
     const aoa: string[][] = [
       Object.keys(freshCases[0] ?? {}),
@@ -410,20 +412,19 @@ async function main() {
     }
   }
   if (config.objectedClaims) {
-    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 60000 });
-    await page.addScriptTag({ path: path.resolve(__dirname, '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js') });
-    await openTab(page, 'OBJECTED CASE');
+    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/objected-cases-u?clear=RP&session=${session}`, { timeout: 60000 });
     const cases = await goThroughPages(page, 'OBJECTED CASE');
     const aoa: string[][] = [
-      [...Object.keys(cases[0] ?? {}), 'Description', 'Remarks'],
+      [...Object.keys(cases[0] ?? {}).filter(x => x !== 'Action'), 'Description', 'Remarks'],
     ];
     for (const _case of cases) {
-      await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/objected-file-upload?p11_visitno=${_case.Visitno}&session=${session}`, { timeout: 60000 });
+      await page.goto(`https://apps.slichealth.com${_case.Action}`, { timeout: 60000 });
       const desc = await page.locator('//table[@aria-label="Missing Docs"]//td[@headers="DESCRIPTION"]').allTextContents();
       const remarks = await page.locator('//table[@aria-label="Missing Docs"]//td[@headers="REMARKS"]').allTextContents();
       const as: string[][] = [];
       const a: string[] = [];
       for (let j = 0; j < aoa[0].length - 2; j++) {
+        if (aoa[0][j] === 'Action') continue;
         a.push(_case[aoa[0][j]] ?? '');
       }
       if (desc.length !== remarks.length) {
@@ -440,9 +441,7 @@ async function main() {
     await writeAOAtoXLSXFile(aoa, 'Objected Claims');
   }
   if (config.sumbittedClaims) {
-    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/hospital-cases?session=${session}`, { timeout: 60000 });
-    await page.addScriptTag({ path: path.resolve(__dirname, '..', 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js') });
-    await openTab(page, 'SUBMITTED CASE');
+    await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/submitted-cases-u?session=${session}`, { timeout: 60000 });
     const cases = await goThroughPages(page, 'SUBMITTED CASE');
     const aoa: string[][] = [
       Object.keys(cases[0] ?? {}),
