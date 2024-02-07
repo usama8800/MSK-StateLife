@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import { convertWordFiles } from 'convert-multiple-files';
 import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import dotenv from 'dotenv';
 import fsE from 'fs-extra';
 import fsP from 'fs/promises';
@@ -11,10 +12,9 @@ import * as PDFLib from 'pdf-lib';
 import { Page, chromium, devices } from 'playwright';
 import { fileURLToPath } from 'url';
 import * as XLSX from 'xlsx';
+import { XLSXCell, cellValue } from './models.js';
 
-// const token = twoFA.generateToken('XDQXYCP5AC6FA32FQXDGJSPBIDYNKK5W');
-// console.log(token);
-// process.exit();
+dayjs.extend(customParseFormat);
 dotenv.config({ override: true });
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const downloadsFolder = path.resolve(__dirname, '..', 'downloads');
@@ -25,9 +25,9 @@ const envOrDefault = (key: string, defaultValue: boolean) => process.env[key] ? 
 const config = {
   folder: 'patients',
   freshDischarges: envOrDefault('FRESH_DISCHARGES', true),
-  freshClaims: false, //envOrDefault('FRESH_CLAIMS', true),
+  freshClaims: envOrDefault('FRESH_CLAIMS', true),
   objectedClaims: envOrDefault('OBJECTED_CLAIMS', true),
-  sumbittedClaims: false, //envOrDefault('SUBMITTED_CLAIMS', true),
+  sumbittedClaims: envOrDefault('SUBMITTED_CLAIMS', true),
   convertToPDF: envOrDefault('CONVERT_TO_PDF', true),
   headless: envOrDefault('HEADLESS', process.env.MODE !== 'dev'),
   force: envOrDefault('FORCE', false),
@@ -106,10 +106,10 @@ function getGitHash() {
   }
 }
 
-async function writeAOAtoXLSXFile(data: any[][], filename: string) {
+async function writeAOAtoXLSXFile(data: XLSXCell[][], filename: string) {
   const book = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet(data);
-  XLSX.utils.book_append_sheet(book, sheet, 'Fresh Claims');
+  XLSX.utils.book_append_sheet(book, sheet);
   const fileBuffer = XLSX.write(book, {
     bookType: 'xlsx',
     type: 'buffer',
@@ -146,7 +146,9 @@ async function goThroughPages(page: Page, tab: string) {
           const win = window as any;
           win.mytable = win.$('table[id$=\'_orig\']')[0];
           console.log(1, win.mytable);
-          win.mysheet = win.XLSX.utils.table_to_sheet(win.mytable);
+          win.mysheet = win.XLSX.utils.table_to_sheet(win.mytable, {
+            raw: true
+          });
           console.log(2, win.mysheet);
           win.mykeys = Object.keys(win.mysheet);
           win.mykeys.forEach(k => {
@@ -163,8 +165,7 @@ async function goThroughPages(page: Page, tab: string) {
         }
       }, tab);
       if (_cases.length === 0) {
-        // if (process.env.MODE === 'dev') await page.pause();
-        await page.waitForTimeout(1000000);
+        if (process.env.MODE === 'dev') await page.waitForTimeout(1000000);
         return false;
       }
       cases.push(..._cases);
@@ -304,22 +305,19 @@ async function main() {
 
   await page.route('**/*', route => {
     if (route.request().resourceType() === 'font') return route.abort();
+
     if (route.request().url() === 'https://apps.slichealth.com/ords/wwv_flow.ajax') {
-      const data = route.request().postData();
-      if (data && data.includes('p_widget_action=paginate')) {
-        const minMatch = data.match(/p_pg_min_row=(\d+)/);
-        const maxMatch = data.match(/p_pg_max_rows=(\d+)/);
-        const fetchedMatch = data.match(/p_pg_rows_fetched=(\d+)/);
-        if (minMatch && maxMatch && fetchedMatch) {
-          const min = parseInt(minMatch[1]);
-          const max = parseInt(maxMatch[1]);
-          const fetched = parseInt(fetchedMatch[1]);
+      const data = decodeURIComponent(route.request().postData() ?? '');
+      if (data && data.includes('p_widget_action=PAGE')) {
+        const match = data.match(/pgR_min_row=(\d+)max_rows=(\d+)rows_fetched=(\d+)/);
+        if (match) {
+          const min = parseInt(match[1]);
           if (min < 2 << 16 - 1) {
             const newMax = 2 << 16 - 1;
-            // const newFetched = newMax - min;
+            const newFetched = newMax - min;
             const newData = data
-              .replace(`p_pg_max_rows=${max}`, `p_pg_max_rows=${newMax}`)
-              .replace(`p_pg_rows_fetched=${fetched}`, `p_pg_rows_fetched=${newMax}`);
+              .replace(match[0], `pgR_min_row=${min}max_rows=${newMax}rows_fetched=${newFetched}`)
+              .replace('p_widget_num_return=50', 'p_widget_num_return=' + newFetched);
             route.continue({ postData: newData });
             return;
           }
@@ -353,7 +351,7 @@ async function main() {
   const session = new URL(page.url()).searchParams.get('session');
 
   let freshCases: Claim[] = [];
-  if (config.freshClaims) {
+  if (config.freshClaims && '') {
     await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/search-fresh-case-visitno?clear=4&session=${session}`, { timeout: 60000 });
     freshCases = await goThroughPages(page, 'FRESH CASES');
     const aoa: string[][] = [
@@ -368,7 +366,7 @@ async function main() {
     }
     await writeAOAtoXLSXFile(aoa, 'Fresh Claims');
   }
-  if (config.freshDischarges) {
+  if (config.freshDischarges && '') {
     const patients = await getPatients();
     log(`Uploading ${patients.length} fresh discharges...`);
     for (let i = 0; i < patients.length; i++) {
@@ -414,27 +412,38 @@ async function main() {
   if (config.objectedClaims) {
     await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/objected-cases-u?clear=RP&session=${session}`, { timeout: 60000 });
     const cases = await goThroughPages(page, 'OBJECTED CASE');
-    const aoa: string[][] = [
-      [...Object.keys(cases[0] ?? {}).filter(x => x !== 'Action'), 'Description', 'Remarks'],
+    const aoa: XLSXCell[][] = [
+      [...Object.keys(cases[0] ?? {}).filter(x => x !== 'Action'), 'Description', 'Files'],
     ];
+
     for (const _case of cases) {
       await page.goto(`https://apps.slichealth.com${_case.Action}`, { timeout: 60000 });
-      const desc = await page.locator('//table[@aria-label="Missing Docs"]//td[@headers="DESCRIPTION"]').allTextContents();
-      const remarks = await page.locator('//table[@aria-label="Missing Docs"]//td[@headers="REMARKS"]').allTextContents();
-      const as: string[][] = [];
-      const a: string[] = [];
+      const descLocators = await page.locator('//div[@id="R65307116285040317_Cards"]/div/div[3]/ul/li/div/div[1]/div[2]/h3');
+      const filesLocators = await page.locator('//div[@id="R65307116285040317_Cards"]/div/div[3]/ul/li/div/div[2]/div');
+      const desc = await descLocators.allTextContents();
+      const files = await filesLocators.allTextContents();
+      const as: XLSXCell[][] = [];
+      const a: XLSXCell[] = [];
       for (let j = 0; j < aoa[0].length - 2; j++) {
         if (aoa[0][j] === 'Action') continue;
-        a.push(_case[aoa[0][j]] ?? '');
+        if (aoa[0][j] === 'Admission Date') {
+          const date = dayjs(_case[cellValue(aoa[0][j])], 'DD-MM-YYYY');
+          if (date.isValid()) a.push({ t: 'd', v: date.format('YYYY-MM-DD') });
+          else a.push(_case[cellValue(aoa[0][j])]);
+        } else if (aoa[0][j] === 'Discharge Date') {
+          const date = dayjs(_case[cellValue(aoa[0][j])]);
+          if (date.isValid()) a.push({ t: 'd', v: date.format('YYYY-MM-DD') });
+          else a.push(_case[cellValue(aoa[0][j])]);
+        } else a.push(_case[cellValue(aoa[0][j])] ?? '');
       }
-      if (desc.length !== remarks.length) {
-        log(`${_case.Visitno}: Error! Desc and remarks length mismatch`);
-        a.push(desc.join('\n'), remarks.join('\n'));
-        as.push(a);
-      } else {
+      if (desc.length === files.length) {
         for (let j = 0; j < desc.length; j++) {
-          as.push([...a, desc[j], remarks[j]]);
+          as.push([...a, desc[j], files[j]]);
         }
+      } else {
+        log(`${_case.Visitno}: Error! Desc and files length mismatch`);
+        a.push(desc.join('\n'), files.join('\n'));
+        as.push(a);
       }
       aoa.push(...as);
     }
@@ -443,13 +452,21 @@ async function main() {
   if (config.sumbittedClaims) {
     await page.goto(`https://apps.slichealth.com/ords/ihmis_admin/r/eclaim-upload/submitted-cases-u?session=${session}`, { timeout: 60000 });
     const cases = await goThroughPages(page, 'SUBMITTED CASE');
-    const aoa: string[][] = [
+    const aoa: XLSXCell[][] = [
       Object.keys(cases[0] ?? {}),
     ];
     for (const _case of cases) {
-      const a: string[] = [];
+      const a: XLSXCell[] = [];
       for (let j = 0; j < aoa[0].length; j++) {
-        a.push(_case[aoa[0][j]] ?? '');
+        if (aoa[0][j] === 'Admission Date' || aoa[0][j] === 'Discharge Date') {
+          const date = dayjs(_case[cellValue(aoa[0][j])], 'DD-MM-YYYY');
+          if (date.isValid()) a.push({ t: 'd', v: date.format('YYYY-MM-DD') });
+          else a.push(_case[cellValue(aoa[0][j])]);
+        } else if (aoa[0][j] === 'Submitted Date') {
+          const date = dayjs(_case[cellValue(aoa[0][j])]);
+          if (date.isValid()) a.push({ t: 'd', v: date.format('YYYY-MM-DD') });
+          else a.push(_case[cellValue(aoa[0][j])]);
+        } else a.push(_case[cellValue(aoa[0][j])] ?? '');
       }
       aoa.push(a);
     }
