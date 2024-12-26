@@ -1,29 +1,16 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "declaration": true,
+    "moduleResolution": "node",
+    "lib": [
+      "ESNext"
+    ],
+    "module": "CommonJS",
     "sourceMap": true,
     "outDir": "./out",
     "rootDir": "./src",
     "strict": true,
+    "strictNullChecks": true,
     "noImplicitAny": false,
-    "strictPropertyInitialization": false,
-    "typeRoots": [
-      "src/typings",
-      "./node_modules/@types"
-    ],
-    "esModuleInterop": true,
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
   },
-  "include": [
-    "env.d.ts",
-    "src/**/*.ts",
-  ],
-  "exclude": [
-    "node_modules",
-  ]
 }
