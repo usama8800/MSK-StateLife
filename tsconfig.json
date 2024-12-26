@@ -3,9 +3,11 @@
     "target": "ES2022",
     "moduleResolution": "node",
     "lib": [
-      "ESNext"
+      "ESNext",
+      "DOM",
     ],
     "module": "CommonJS",
+    "esModuleInterop": true,
     "sourceMap": true,
     "outDir": "./out",
     "rootDir": "./src",
