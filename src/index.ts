@@ -10,7 +10,7 @@ import { XLSXCell } from './models';
 
 const env = loadEnv({
   schema: z.strictObject({
-    MODE: z.union([z.literal(''), z.literal('dev')]),
+    MODE: z.union([z.literal(''), z.literal('dev')]).default(''),
     NODE_TLS_REJECT_UNAUTHORIZED: booleanSchema,
     username: z.string(),
     password: z.string(),
