@@ -352,7 +352,7 @@ async function main() {
   // } else {
   //   await page.focus('#P9999_CODE');
   // }
-  await page.waitForURL(u => u.pathname === '/ords/nhmis/r/eclaim-upload/home' && u.searchParams.has('session'), {
+  await page.waitForURL(u => u.pathname === '/ords/ihmis_admin/r/eclaim-upload/home' && u.searchParams.has('session'), {
     timeout: 3 * 60 * 1000
   });
   const session = new URL(page.url()).searchParams.get('session');
