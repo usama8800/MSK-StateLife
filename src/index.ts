@@ -3,7 +3,7 @@ import fsE from 'fs-extra';
 import _ from 'lodash';
 import { parse as parsePath, resolve } from 'path';
 import * as PDFLib from 'pdf-lib';
-import { chromium, devices, Page } from 'playwright';
+import { Page, chromium, devices } from 'playwright';
 import XLSX from 'xlsx-js-style';
 import { z } from 'zod';
 import { XLSXCell } from './models';
@@ -394,27 +394,26 @@ async function main() {
           }
         } catch { /* empty */ }
       }
-      await page.waitForURL(u => u.pathname === '/ords/nhmis/r/eclaim-upload/compress-upload' && u.searchParams.has('session') && u.searchParams.has('p14_visitno') && u.searchParams.has('cs'));
+      await page.waitForURL(u => u.pathname === '/ords/r/ihmis_admin/eclaim-upload/compress-upload' && u.searchParams.has('session') && u.searchParams.has('p14_visitno') && u.searchParams.has('cs'));
       for (const docType of Object.keys(patient.docs)) {
         await page.locator(`#${docType}`).setInputFiles(patient.docs[docType]);
       }
       await page.getByRole('button', { name: 'Preview' }).first().click();
-      // TODO
-      requestPromise = page.waitForRequest('https://eclaim2.slichealth.com/ords/ihmis_admin/eclaim/eclaim_upload_fresh_docs');
-      await page.pause();
-      // await page.locator('#uploadBtn').click();
-      // const request = await requestPromise;
-      // const response = await request.response();
-      // if (!response) {
-      //   log(`${i + 1} ${patient.visitNo}: Error! No response from uploading`);
-      //   continue;
-      // }
-      // if (response.status() === 200) log(`${i + 1} ${patient.visitNo}: Success!`);
-      // else log(`${i + 1} ${patient.visitNo}: Error!`);
+      // TODO check url after clicking submit
+      requestPromise = page.waitForRequest('https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim/eclaim_upload_fresh_docs');
+      await page.locator('#uploadBtn').click();
+      const request = await requestPromise;
+      const response = await request.response();
+      if (!response) {
+        log(`${i + 1} ${patient.visitNo}: Error! No response from uploading`);
+        continue;
+      }
+      if (response.status() === 200) log(`${i + 1} ${patient.visitNo}: Success!`);
+      else log(`${i + 1} ${patient.visitNo}: Error!`);
     }
   }
   if (env.DOWNLOAD_SUBMITTED_CASES) {
-    await page.goto(`https://api2.slichealth.com/ords/nhmis/r/eclaim-upload/submitted-cases-u?session=${session}`);
+    await page.goto(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/submitted-cases-u?session=${session}`);
     const cases = await goThroughPages(page, 'FRESH CASES');
     const aoa: string[][] = [
       Object.keys(cases[0] ?? {}),
