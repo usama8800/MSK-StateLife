@@ -34,7 +34,6 @@ const env = loadEnv({
 });
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = env.NODE_TLS_REJECT_UNAUTHORIZED ? '1' : '0';
 
-let discordHook: string | undefined;
 const logFilePath = 'log.txt';
 let logFileData = '';
 
@@ -82,14 +81,6 @@ const docTypesMap: Record<string, string> = {
   11: 'Birth',
 };
 
-async function getHook() {
-  try {
-    const hookRes = await fetch('https://usama8800.net/server/kv/dg');
-    const text = await hookRes.text();
-    if (text.startsWith('http')) discordHook = text;
-  } catch (error) { /* empty */ }
-}
-
 function log(...args: any[]) {
   console.log(...args);
   appendLogFile(args.map(x => {
@@ -101,15 +92,6 @@ function log(...args: any[]) {
 function appendLogFile(str: string) {
   logFileData += `>>>\t${str}\n`;
 }
-
-// function getGitHash() {
-//   try {
-//     const hash = execSync('git rev-parse HEAD').toString().trim();
-//     return hash;
-//   } catch (error) {
-//     return 'Unknown';
-//   }
-// }
 
 async function writeAOAtoXLSXFile(data: XLSXCell[][], filename: string) {
   const book = XLSX.utils.book_new();
@@ -299,6 +281,38 @@ async function getPatients() {
   return patients;
 }
 
+async function newPage(context: BrowserContext) {
+  const page = await context.newPage();
+  await page.addInitScript({ path: resolve('node_modules', 'xlsx-js-style', 'dist', 'xlsx.min.js') });
+
+  await page.route('**/*', route => {
+    if (route.request().resourceType() === 'font') return route.abort();
+    if (route.request().resourceType() === 'stylesheeeet') return route.abort();
+
+    if (route.request().url().startsWith('https://eclaim2.slichealth.com/ords/wwv_flow.ajax')) {
+      const data = decodeURIComponent(route.request().postData() ?? '');
+      if (data && data.includes('p_widget_action=PAGE')) {
+        const match = data.match(/pgR_min_row=(\d+)max_rows=(\d+)rows_fetched=(\d+)/);
+        if (match) {
+          const min = parseInt(match[1]);
+          if (min < 2 << 16 - 1) {
+            const newMax = 2 << 16 - 1;
+            const newFetched = newMax - min;
+            const newData = data
+              .replace(match[0], `pgR_min_row=${min}max_rows=${newMax}rows_fetched=${newFetched}`)
+              .replace('p_widget_num_return=50', 'p_widget_num_return=' + newFetched);
+            route.continue({ postData: newData });
+            return;
+          }
+        }
+      }
+    }
+    return route.continue();
+  });
+
+  return page;
+}
+
 async function uploadFreshCase(context: BrowserContext, session: string | null, patient: Patient) {
   const _page = await context.newPage();
   while (true) {
@@ -341,6 +355,23 @@ async function uploadFreshCase(context: BrowserContext, session: string | null, 
   }
 }
 
+async function downloadSubmittedCases(context: BrowserContext, session: string | null) {
+  const page = await newPage(context);
+  await page.goto(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/submitted-cases-u?session=${session}`);
+  const cases = await goThroughPages(page, 'FRESH CASES');
+  const aoa: string[][] = [
+    Object.keys(cases[0] ?? {}),
+  ];
+  for (const _case of cases) {
+    const a: string[] = [];
+    for (let j = 0; j < aoa[0].length; j++) {
+      a.push(_case[aoa[0][j]] ?? '');
+    }
+    aoa.push(a);
+  }
+  await writeAOAtoXLSXFile(aoa, 'Submitted Cases');
+}
+
 async function main() {
   const browser = await chromium.launch({
     headless: env.HEADLESS,
@@ -350,33 +381,7 @@ async function main() {
   });
   const context = await browser.newContext(devices['Desktop Chrome']);
   context.setDefaultTimeout(10 * 60 * 1000);
-  const page = await context.newPage();
-  await page.addInitScript({ path: resolve('node_modules', 'xlsx-js-style', 'dist', 'xlsx.min.js') });
-
-  await page.route('**/*', route => {
-    if (route.request().resourceType() === 'font') return route.abort();
-    if (route.request().resourceType() === 'stylesheeeet') return route.abort();
-
-    if (route.request().url().startsWith('https://eclaim2.slichealth.com/ords/wwv_flow.ajax')) {
-      const data = decodeURIComponent(route.request().postData() ?? '');
-      if (data && data.includes('p_widget_action=PAGE')) {
-        const match = data.match(/pgR_min_row=(\d+)max_rows=(\d+)rows_fetched=(\d+)/);
-        if (match) {
-          const min = parseInt(match[1]);
-          if (min < 2 << 16 - 1) {
-            const newMax = 2 << 16 - 1;
-            const newFetched = newMax - min;
-            const newData = data
-              .replace(match[0], `pgR_min_row=${min}max_rows=${newMax}rows_fetched=${newFetched}`)
-              .replace('p_widget_num_return=50', 'p_widget_num_return=' + newFetched);
-            route.continue({ postData: newData });
-            return;
-          }
-        }
-      }
-    }
-    return route.continue();
-  });
+  const page = await newPage(context);
 
   try {
     await page.goto('https://eclaim2.slichealth.com/ords/ihmis_admin/r/eclaim-upload/login');
@@ -401,139 +406,25 @@ async function main() {
   });
   const session = new URL(page.url()).searchParams.get('session');
 
-  // let freshCases: Claim[] = [];
+  const promises: Promise<any>[] = [];
   if (env.UPLOAD_FRESH_CASES) {
     const patients = await getPatients();
     log(`Uploading ${patients.length} fresh discharges...`);
 
-    await parallelLimit(patients.map(p => callback => {
+    promises.push(parallelLimit(patients.map(p => callback => {
       uploadFreshCase(context, session, p).finally(callback);
-    }), env.PARALLEL_UPLOADS);
-    // for (let i = 0; i < patients.length; i++) {
-    //   await uploadFreshCase(context, session, patients[i]);
-    // }
+    }), env.PARALLEL_UPLOADS));
   }
   if (env.DOWNLOAD_SUBMITTED_CASES) {
-    await page.goto(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/submitted-cases-u?session=${session}`);
-    const cases = await goThroughPages(page, 'FRESH CASES');
-    const aoa: string[][] = [
-      Object.keys(cases[0] ?? {}),
-    ];
-    for (const _case of cases) {
-      const a: string[] = [];
-      for (let j = 0; j < aoa[0].length; j++) {
-        a.push(_case[aoa[0][j]] ?? '');
-      }
-      aoa.push(a);
-    }
-    await writeAOAtoXLSXFile(aoa, 'Submitted Cases');
-  }
-  if (env.DOWNLOAD_CLARIFICATION_CASES) {
-    log('Downloading clarification claims not supported');
-    // await page.goto(`https://api2.slichealth.com/ords/ihmis_admin/r/eclaim-upload/objected-cases-u?clear=RP&session=${session}`);
-    // const cases = await goThroughPages(page, 'OBJECTED CASE');
-    // const aoa: XLSXCell[][] = [
-    //   [...Object.keys(cases[0] ?? {}).filter(x => x !== 'Action'), 'Description', 'Files'],
-    // ];
-
-    // for (const _case of cases) {
-    //   await page.goto(`https://apps.slichealth.com${_case.Action}`);
-    //   const descLocators = await page.locator('//div[@id="R65307116285040317_Cards"]/div/div[3]/ul/li/div/div[1]/div[2]/h3');
-    //   const filesLocators = await page.locator('//div[@id="R65307116285040317_Cards"]/div/div[3]/ul/li/div/div[2]/div');
-    //   const desc = await descLocators.allTextContents();
-    //   const files = await filesLocators.allTextContents();
-    //   const as: XLSXCell[][] = [];
-    //   const a: XLSXCell[] = [];
-    //   for (let j = 0; j < aoa[0].length - 2; j++) {
-    //     if (aoa[0][j] === 'Action') continue;
-    //     if (aoa[0][j] === 'Admission Date') {
-    //       // const date = dayjs(_case[cellValue(aoa[0][j])], 'DD-MM-YYYY');
-    //       // if (date.isValid()) a.push({ t: 'd', v: date.format('YYYY-MM-DD') });
-    //       // else a.push(_case[cellValue(aoa[0][j])]);
-    //     } else if (aoa[0][j] === 'Discharge Date') {
-    //       // const date = dayjs(_case[cellValue(aoa[0][j])]);
-    //       // if (date.isValid()) a.push({ t: 'd', v: date.format('YYYY-MM-DD') });
-    //       // else a.push(_case[cellValue(aoa[0][j])]);
-    //     } else a.push(_case[cellValue(aoa[0][j])] ?? '');
-    //   }
-    //   if (desc.length === files.length) {
-    //     for (let j = 0; j < desc.length; j++) {
-    //       as.push([...a, desc[j], files[j]]);
-    //     }
-    //   } else {
-    //     log(`${_case.Visitno}: Error! Desc and files length mismatch`);
-    //     a.push(desc.join('\n'), files.join('\n'));
-    //     as.push(a);
-    //   }
-    //   aoa.push(...as);
-    // }
-    // await writeAOAtoXLSXFile(aoa, 'Objected Claims');
-  }
-  if (env.DOWNLOAD_OBJECTED_CASES) {
-    log('Downloading objected claims not supported');
-    // await page.goto(`https://api2.slichealth.com/ords/ihmis_admin/r/eclaim-upload/submitted-cases-u?session=${session}`);
-    // const cases = await goThroughPages(page, 'SUBMITTED CASE');
-    // const aoa: XLSXCell[][] = [
-    //   Object.keys(cases[0] ?? {}),
-    // ];
-    // for (const _case of cases) {
-    //   const a: XLSXCell[] = [];
-    //   for (let j = 0; j < aoa[0].length; j++) {
-    //     if (aoa[0][j] === 'Admission Date' || aoa[0][j] === 'Discharge Date') {
-    //       // const date = dayjs(_case[cellValue(aoa[0][j])], 'DD-MM-YYYY');
-    //       // if (date.isValid()) a.push({ t: 'd', v: date.format('YYYY-MM-DD') });
-    //       // else a.push(_case[cellValue(aoa[0][j])]);
-    //     } else if (aoa[0][j] === 'Submitted Date') {
-    //       // const date = dayjs(_case[cellValue(aoa[0][j])]);
-    //       // if (date.isValid()) a.push({ t: 'd', v: date.format('YYYY-MM-DD') });
-    //       // else a.push(_case[cellValue(aoa[0][j])]);
-    //     } else a.push(_case[cellValue(aoa[0][j])] ?? '');
-    //   }
-    //   aoa.push(a);
-    // }
-    // await writeAOAtoXLSXFile(aoa, 'Submitted Claims');
-  }
-  if (env.DOWNLOAD_REJECTED_CASES) {
-    log('Downloading rejected claims not supported');
+    promises.push(downloadSubmittedCases(context, session));
   }
 
-  // Teardown
-  // if (config.headless) {
+  await Promise.all(promises);
   await context.close();
   await browser.close();
-  // }
 }
 
 (async () => {
-  // const date = new Date().toISOString();
-  // const hash = getGitHash();
-  // const header = `**MSK Statelife** @ _${os.userInfo().username}_ | _${os.hostname()}_: \`${date}\`\n`
-  //   + `${process.argv.join(' ')}\n`
-  //   + `Version: ${hash}\n`;
-  // const c = '```';
-  let handlingSigInt = false;
-  const handler = async (reason: any) => {
-    if (handlingSigInt) return;
-    if (!reason.isSigInt) console.log(reason);
-    if (reason.isSigInt) handlingSigInt = true;
-    if (discordHook && env.MODE !== 'dev') {
-      // const content = reason.isSigInt ? `SIGINT\n${c}${logFileData}${c}` : `Uncaught Error\n${c}${reason.stack}${c}`;
-      try {
-        // await fetch(discordHook!, {
-        //   method: 'POST',
-        //   headers: { 'Content-Type': 'application/json' },
-        //   body: JSON.stringify({
-        //     content: `${header}\n${content}`,
-        //   }),
-        // });
-      } catch (error) { /* empty */ }
-    }
-    process.exit(1);
-  };
-  process
-    .on('unhandledRejection', handler)
-    .on('uncaughtException', handler)
-    .on('SIGINT', () => handler({ isSigInt: true }));
   if (process.argv.length > 2) {
     let patientsPath = process.argv.slice(2).join(' ');
     if (!patientsPath.startsWith('"') && patientsPath.endsWith('"'))
@@ -543,17 +434,7 @@ async function main() {
   } else {
     // log('Folder not given. Using ./patients');
   }
-  if (env.MODE !== 'dev') getHook();
   await fsE.ensureDir(env.DOWNLOADS_FOLDER);
   await main();
   fsE.writeFile(logFilePath, logFileData);
-  if (discordHook && env.MODE !== 'dev') {
-    // fetch(discordHook!, {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     content: `${header}${logFileData}`,
-    //   }),
-    // });
-  }
 })();
