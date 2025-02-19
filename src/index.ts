@@ -1,9 +1,10 @@
 import { booleanSchema, loadEnv } from '@usama8800/dotenvplus';
+import { parallelLimit } from 'async';
 import fsE from 'fs-extra';
 import _ from 'lodash';
 import { parse as parsePath, resolve } from 'path';
 import * as PDFLib from 'pdf-lib';
-import { Page, chromium, devices } from 'playwright';
+import { BrowserContext, Page, chromium, devices } from 'playwright';
 import XLSX from 'xlsx-js-style';
 import { z } from 'zod';
 import { XLSXCell } from './models';
@@ -28,6 +29,7 @@ const env = loadEnv({
     PATIENTS_FOLDER: z.string().default('patients'),
     DOWNLOADS_FOLDER: z.string().default('downloads'),
     PERMANENT_2FA: z.string().optional(),
+    PARALLEL_UPLOADS: z.coerce.number().default(5),
   }),
 });
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = env.NODE_TLS_REJECT_UNAUTHORIZED ? '1' : '0';
@@ -297,6 +299,48 @@ async function getPatients() {
   return patients;
 }
 
+async function uploadFreshCase(context: BrowserContext, session: string | null, patient: Patient) {
+  const _page = await context.newPage();
+  while (true) {
+    try {
+      await _page.goto(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/search-fresh-case-visitno?session=${session}`);
+      break;
+    } catch { /* empty */ }
+  }
+  await _page.fill('#P4_VISITNO', `${patient.visitNo}`);
+
+  const requestPromise = _page.waitForRequest(`https://eclaim2.slichealth.com/ords/wwv_flow.accept?p_context=eclaim-upload/search-fresh-case-visitno/${session}`);
+  const requestPromise2 = _page.waitForRequest(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/search-fresh-case-visitno?session=${session}`);
+  await _page.press('#P4_VISITNO', 'Enter');
+  await requestPromise;
+  await requestPromise2;
+  const notFoundLocator = _page.getByText('No Case Found!!!');
+  const foundLocator = _page.locator('xpath=//*[@id="report_table_freshCase"]/tbody/tr/td[10]/a');
+  while (true) {
+    try {
+      if (await foundLocator.count() > 0) {
+        await foundLocator.click();
+        break;
+      }
+      if (await notFoundLocator.count() > 0) {
+        log(`${patient.visitNo}: Not in fresh cases`);
+        return;
+      }
+    } catch { /* empty */ }
+  }
+  await _page.waitForURL(u => u.pathname === '/ords/r/ihmis_admin/eclaim-upload/compress-upload' && u.searchParams.has('session') && u.searchParams.has('p14_visitno') && u.searchParams.has('cs'));
+  for (const docType of Object.keys(patient.docs)) {
+    await _page.locator(`#${docType}`).setInputFiles(patient.docs[docType]);
+  }
+  await _page.getByRole('button', { name: 'Preview' }).first().click();
+  if (env.MODE === 'dev') {
+    await _page.waitForTimeout(2000);
+  } else {
+    await _page.locator('#uploadBtn').click();
+    await _page.waitForLoadState('networkidle');
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({
     headless: env.HEADLESS,
@@ -361,57 +405,13 @@ async function main() {
   if (env.UPLOAD_FRESH_CASES) {
     const patients = await getPatients();
     log(`Uploading ${patients.length} fresh discharges...`);
-    patientLoop: for (let i = 0; i < patients.length; i++) {
-      const patient = patients[i];
-      // if (!env.FORCE && freshCases.length > 0 && !freshCases.some(x => x.Visitno === +patient.visitNo)) {
-      //   log(`${i + 1} ${patient.visitNo}: Not in fresh cases`);
-      //   continue;
-      // }
-      while (true) {
-        try {
-          await page.goto(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/search-fresh-case-visitno?session=${session}`);
-          break;
-        } catch { /* empty */ }
-      }
-      await page.fill('#P4_VISITNO', `${patient.visitNo}`);
 
-      const requestPromise = page.waitForRequest(`https://eclaim2.slichealth.com/ords/wwv_flow.accept?p_context=eclaim-upload/search-fresh-case-visitno/${session}`);
-      const requestPromise2 = page.waitForRequest(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/search-fresh-case-visitno?session=${session}`);
-      await page.press('#P4_VISITNO', 'Enter');
-      await requestPromise;
-      await requestPromise2;
-      const notFoundLocator = page.getByText('No Case Found!!!');
-      const foundLocator = page.locator('xpath=//*[@id="report_table_freshCase"]/tbody/tr/td[10]/a');
-      while (true) {
-        try {
-          if (await foundLocator.count() > 0) {
-            await foundLocator.click();
-            break;
-          }
-          if (await notFoundLocator.count() > 0) {
-            log(`${i + 1} ${patient.visitNo}: Not in fresh cases`);
-            continue patientLoop;
-          }
-        } catch { /* empty */ }
-      }
-      await page.waitForURL(u => u.pathname === '/ords/r/ihmis_admin/eclaim-upload/compress-upload' && u.searchParams.has('session') && u.searchParams.has('p14_visitno') && u.searchParams.has('cs'));
-      for (const docType of Object.keys(patient.docs)) {
-        await page.locator(`#${docType}`).setInputFiles(patient.docs[docType]);
-      }
-      await page.getByRole('button', { name: 'Preview' }).first().click();
-      // TODO check url after clicking submit
-      // requestPromise = page.waitForRequest('https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim/eclaim_upload_fresh_docs');
-      await page.locator('#uploadBtn').click();
-      await page.waitForLoadState('networkidle');
-      // const request = await requestPromise;
-      // const response = await request.response();
-      // if (!response) {
-      //   log(`${i + 1} ${patient.visitNo}: Error! No response from uploading`);
-      //   continue;
-      // }
-      // if (response.status() === 200) log(`${i + 1} ${patient.visitNo}: Success!`);
-      // else log(`${i + 1} ${patient.visitNo}: Error!`);
-    }
+    await parallelLimit(patients.map(p => callback => {
+      uploadFreshCase(context, session, p).finally(callback);
+    }), env.PARALLEL_UPLOADS);
+    // for (let i = 0; i < patients.length; i++) {
+    //   await uploadFreshCase(context, session, patients[i]);
+    // }
   }
   if (env.DOWNLOAD_SUBMITTED_CASES) {
     await page.goto(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/submitted-cases-u?session=${session}`);
