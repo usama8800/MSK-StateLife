@@ -375,7 +375,7 @@ async function main() {
       }
       await page.fill('#P4_VISITNO', `${patient.visitNo}`);
 
-      let requestPromise = page.waitForRequest(`https://eclaim2.slichealth.com/ords/wwv_flow.accept?p_context=eclaim-upload/search-fresh-case-visitno/${session}`);
+      const requestPromise = page.waitForRequest(`https://eclaim2.slichealth.com/ords/wwv_flow.accept?p_context=eclaim-upload/search-fresh-case-visitno/${session}`);
       const requestPromise2 = page.waitForRequest(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/search-fresh-case-visitno?session=${session}`);
       await page.press('#P4_VISITNO', 'Enter');
       await requestPromise;
@@ -400,16 +400,17 @@ async function main() {
       }
       await page.getByRole('button', { name: 'Preview' }).first().click();
       // TODO check url after clicking submit
-      requestPromise = page.waitForRequest('https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim/eclaim_upload_fresh_docs');
+      // requestPromise = page.waitForRequest('https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim/eclaim_upload_fresh_docs');
       await page.locator('#uploadBtn').click();
-      const request = await requestPromise;
-      const response = await request.response();
-      if (!response) {
-        log(`${i + 1} ${patient.visitNo}: Error! No response from uploading`);
-        continue;
-      }
-      if (response.status() === 200) log(`${i + 1} ${patient.visitNo}: Success!`);
-      else log(`${i + 1} ${patient.visitNo}: Error!`);
+      await page.waitForLoadState('networkidle');
+      // const request = await requestPromise;
+      // const response = await request.response();
+      // if (!response) {
+      //   log(`${i + 1} ${patient.visitNo}: Error! No response from uploading`);
+      //   continue;
+      // }
+      // if (response.status() === 200) log(`${i + 1} ${patient.visitNo}: Success!`);
+      // else log(`${i + 1} ${patient.visitNo}: Error!`);
     }
   }
   if (env.DOWNLOAD_SUBMITTED_CASES) {
