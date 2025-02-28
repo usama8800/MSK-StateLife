@@ -29,7 +29,8 @@ const env = loadEnv({
     PATIENTS_FOLDER: z.string().default('patients'),
     DOWNLOADS_FOLDER: z.string().default('downloads'),
     PERMANENT_2FA: z.string().optional(),
-    PARALLEL_UPLOADS: z.coerce.number().default(5),
+    PARALLEL_UPLOADS: z.coerce.number().default(1),
+    PARALLEL_DOWNLOADS: booleanSchema.optional(),
   }),
 });
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = env.NODE_TLS_REJECT_UNAUTHORIZED ? '1' : '0';
@@ -313,8 +314,8 @@ async function newPage(context: BrowserContext) {
   return page;
 }
 
-async function uploadFreshCase(context: BrowserContext, session: string | null, patient: Patient) {
-  const _page = await context.newPage();
+async function uploadFreshCase(context: BrowserContext, session: string | null, patient: Patient, page?: Page) {
+  const _page = page ? page : await context.newPage();
   while (true) {
     try {
       await _page.goto(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/search-fresh-case-visitno?session=${session}`);
@@ -330,35 +331,41 @@ async function uploadFreshCase(context: BrowserContext, session: string | null, 
   await requestPromise2;
   const notFoundLocator = _page.getByText('No Case Found!!!');
   const foundLocator = _page.locator('xpath=//*[@id="report_table_freshCase"]/tbody/tr/td[10]/a');
+  let found = false;
   while (true) {
     try {
       if (await foundLocator.count() > 0) {
         await foundLocator.click();
+        found = true;
         break;
       }
       if (await notFoundLocator.count() > 0) {
         log(`${patient.visitNo}: Not in fresh cases`);
-        return;
+        found = false;
+        break;
       }
     } catch { /* empty */ }
   }
-  await _page.waitForURL(u => u.pathname === '/ords/r/ihmis_admin/eclaim-upload/compress-upload' && u.searchParams.has('session') && u.searchParams.has('p14_visitno') && u.searchParams.has('cs'));
-  for (const docType of Object.keys(patient.docs)) {
-    await _page.locator(`#${docType}`).setInputFiles(patient.docs[docType]);
+  if (found) {
+    await _page.waitForURL(u => u.pathname === '/ords/r/ihmis_admin/eclaim-upload/compress-upload' && u.searchParams.has('session') && u.searchParams.has('p14_visitno') && u.searchParams.has('cs'));
+    for (const docType of Object.keys(patient.docs)) {
+      await _page.locator(`#${docType}`).setInputFiles(patient.docs[docType]);
+    }
+    await _page.getByRole('button', { name: 'Preview' }).first().click();
+    if (env.MODE === 'dev') {
+      await _page.waitForTimeout(2000);
+    } else {
+      await _page.locator('#uploadBtn').click();
+      await _page.waitForLoadState('networkidle');
+    }
   }
-  await _page.getByRole('button', { name: 'Preview' }).first().click();
-  if (env.MODE === 'dev') {
-    await _page.waitForTimeout(2000);
-  } else {
-    await _page.locator('#uploadBtn').click();
-    await _page.waitForLoadState('networkidle');
-  }
+  if (!page) await _page.close();
 }
 
-async function downloadSubmittedCases(context: BrowserContext, session: string | null) {
-  const page = await newPage(context);
-  await page.goto(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/submitted-cases-u?session=${session}`);
-  const cases = await goThroughPages(page, 'FRESH CASES');
+async function downloadSubmittedCases(context: BrowserContext, session: string | null, page?: Page) {
+  const _page = page ? page : await context.newPage();
+  await _page.goto(`https://eclaim2.slichealth.com/ords/r/ihmis_admin/eclaim-upload/submitted-cases-u?session=${session}`);
+  const cases = await goThroughPages(_page, 'FRESH CASES');
   const aoa: string[][] = [
     Object.keys(cases[0] ?? {}),
   ];
@@ -370,6 +377,7 @@ async function downloadSubmittedCases(context: BrowserContext, session: string |
     aoa.push(a);
   }
   await writeAOAtoXLSXFile(aoa, 'Submitted Cases');
+  if (!page) await _page.close();
 }
 
 async function main() {
@@ -412,11 +420,12 @@ async function main() {
     log(`Uploading ${patients.length} fresh discharges...`);
 
     promises.push(parallelLimit(patients.map(p => callback => {
-      uploadFreshCase(context, session, p).finally(callback);
+      uploadFreshCase(context, session, p, env.PARALLEL_UPLOADS === 1 ? page : undefined).finally(callback);
     }), env.PARALLEL_UPLOADS));
   }
+  if (!env.PARALLEL_DOWNLOADS) await Promise.all(promises);
   if (env.DOWNLOAD_SUBMITTED_CASES) {
-    promises.push(downloadSubmittedCases(context, session));
+    promises.push(downloadSubmittedCases(context, session, env.PARALLEL_UPLOADS === 1 ? page : undefined));
   }
 
   await Promise.all(promises);
